@@ -1,6 +1,6 @@
 /**
- * Generates icon.png for the ngx-i18n-validator extension.
- * Run: node generate-icon.js
+ * Generates profile-icon.png for VS Code Marketplace publisher profile.
+ * Run: node generate-profile-icon.js
  * Requires: npm install canvas
  */
 const { createCanvas } = require('canvas');
@@ -10,7 +10,7 @@ const size = 128;
 const canvas = createCanvas(size, size);
 const ctx = canvas.getContext('2d');
 
-// Background — liquid glass: deep dark with subtle blue-purple tint
+// Background — liquid glass: dark red Angular style
 const grad = ctx.createLinearGradient(0, 0, size, size);
 grad.addColorStop(0, '#1a0008');
 grad.addColorStop(0.4, '#2d0010');
@@ -37,31 +37,30 @@ ctx.beginPath();
 ctx.roundRect(1, 1, size - 2, size - 2, 17);
 ctx.stroke();
 
-// Publisher ID — top, muted
+// Big "R" — white with cyan glow
+ctx.shadowColor = '#00e5ff';
+ctx.shadowBlur = 14;
 ctx.fillStyle = '#ffffff';
-ctx.font = 'bold 13px "Courier New", monospace';
+ctx.font = 'bold 72px "Courier New", monospace';
 ctx.textAlign = 'center';
-ctx.textBaseline = 'alphabetic';
-ctx.fillText('Ramiro', size / 2, 22);
+ctx.textBaseline = 'middle';
+ctx.fillText('R', size / 2, size / 2 - 8);
+ctx.shadowBlur = 0;
 
 // Thin separator line
 ctx.strokeStyle = 'rgba(100, 200, 240, 0.25)';
 ctx.lineWidth = 1;
 ctx.beginPath();
-ctx.moveTo(14, 29);
-ctx.lineTo(size - 14, 29);
+ctx.moveTo(14, 100);
+ctx.lineTo(size - 14, 100);
 ctx.stroke();
 
-// Main label — "i18n" high contrast white with cyan glow
-ctx.shadowColor = '#00e5ff';
-ctx.shadowBlur = 12;
+// Publisher ID below
 ctx.fillStyle = '#ffffff';
-ctx.font = 'bold 40px "Courier New", monospace';
-ctx.textBaseline = 'middle';
-ctx.fillText('i18n', size / 2, 80);
-ctx.shadowBlur = 0;
-
+ctx.font = 'bold 13px "Courier New", monospace';
+ctx.textBaseline = 'alphabetic';
+ctx.fillText('RamiroCR98', size / 2, 118);
 
 const buffer = canvas.toBuffer('image/png');
-fs.writeFileSync('icon.png', buffer);
-console.log('icon.png generated ✓');
+fs.writeFileSync('profile-icon.png', buffer);
+console.log('profile-icon.png generated ✓');

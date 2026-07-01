@@ -1,9 +1,9 @@
 {
-  "name": "ngx-i18n-validator",
-  "displayName": "ngx-translate i18n Validator",
-  "description": "Validates ngx-translate keys in HTML/TS files against locale JSON files ({locale}/{namespace}.json)",
+  "name": "i18n-key-validator",
+  "displayName": "i18n Key Validator",
+  "description": "Validates i18n translation keys in HTML/TS files against locale JSON files. Supports ngx-translate and similar i18n setups.",
   "publisher": "RamiroCR98",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "icon": "icon.png",
   "engines": {
     "vscode": "^1.74.0"
