@@ -88,16 +88,16 @@ function activate(context) {
     // ── Commands ──────────────────────────────────────────────────────────────
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('ngxI18n.reload', () => {
+        vscode.commands.registerCommand('i18nKV.reload', () => {
             loadLocaleKeys(); revalidateAll(); refreshAllDecorations();
-            vscode.window.showInformationMessage('ngx-i18n: Locale files reloaded ✓');
+            vscode.window.showInformationMessage('i18nKV: Locale files reloaded ✓');
         })
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('ngxI18n.openLocaleFile', async ({ filePath, key }) => {
+        vscode.commands.registerCommand('i18nKV.openLocaleFile', async ({ filePath, key }) => {
             if (!filePath || !fs.existsSync(filePath)) {
-                vscode.window.showWarningMessage(`ngx-i18n: File not found — ${filePath}`);
+                vscode.window.showWarningMessage(`i18nKV: File not found — ${filePath}`);
                 return;
             }
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
@@ -117,7 +117,7 @@ function activate(context) {
 
     // Quick fix: create missing key in all locales
     context.subscriptions.push(
-        vscode.commands.registerCommand('ngxI18n.createKey', async ({ key }) => {
+        vscode.commands.registerCommand('i18nKV.createKey', async ({ key }) => {
             await createKeyInAllLocales(key);
         })
     );
@@ -424,7 +424,7 @@ function provideHover(doc, position) {
         const filePath = keyFileMap[locale]?.[key];
         const cmdArgs = encodeURIComponent(JSON.stringify({ filePath, key }));
         const openLink = filePath
-            ? `[$(go-to-file)](command:ngxI18n.openLocaleFile?${cmdArgs} "Abrir ${locale}/${path.basename(filePath)}")`
+            ? `[$(go-to-file)](command:i18nKV.openLocaleFile?${cmdArgs} "Abrir ${locale}/${path.basename(filePath)}")`
             : '';
 
         md.appendMarkdown(val !== undefined
@@ -545,7 +545,7 @@ function provideCodeActions(doc, range, context) {
             vscode.CodeActionKind.QuickFix
         );
         action.command = {
-            command: 'ngxI18n.createKey',
+            command: 'i18nKV.createKey',
             title: 'Crear key en todos los locales',
             arguments: [{ key }],
         };
@@ -593,7 +593,7 @@ async function createKeyInAllLocales(key) {
         } catch (_) { }
 
         if (localeDirs.length === 0) {
-            vscode.window.showWarningMessage('ngx-i18n: No se encontraron carpetas de locale.');
+            vscode.window.showWarningMessage('i18nKV: No se encontraron carpetas de locale.');
             return;
         }
 
@@ -613,7 +613,7 @@ async function createKeyInAllLocales(key) {
                 fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
                 createdIn.push(locale);
             } catch (e) {
-                vscode.window.showErrorMessage(`ngx-i18n: Error escribiendo ${targetFile}: ${e.message}`);
+                vscode.window.showErrorMessage(`i18nKV: Error escribiendo ${targetFile}: ${e.message}`);
             }
         }
     } else {
@@ -626,7 +626,7 @@ async function createKeyInAllLocales(key) {
         } catch (_) { }
 
         if (localeFiles.length === 0) {
-            vscode.window.showWarningMessage('ngx-i18n: No se encontraron archivos de locale.');
+            vscode.window.showWarningMessage('i18nKV: No se encontraron archivos de locale.');
             return;
         }
 
@@ -646,7 +646,7 @@ async function createKeyInAllLocales(key) {
                 fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
                 createdIn.push(locale);
             } catch (e) {
-                vscode.window.showErrorMessage(`ngx-i18n: Error escribiendo ${targetFile}: ${e.message}`);
+                vscode.window.showErrorMessage(`i18nKV: Error escribiendo ${targetFile}: ${e.message}`);
             }
         }
     }
@@ -657,7 +657,7 @@ async function createKeyInAllLocales(key) {
     refreshAllDecorations();
 
     vscode.window.showInformationMessage(
-        `ngx-i18n: Key "${key}" creado en ${createdIn.join(', ')} ✓`
+        `i18nKV: Key "${key}" creado en ${createdIn.join(', ')} ✓`
     );
 }
 

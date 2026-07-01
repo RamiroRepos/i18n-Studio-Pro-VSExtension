@@ -1,3 +1,10 @@
 node_modules/**
 generate-icon.js
+generate-profile-icon.js
+*.vsix
+EXTENSION-STANDARD.md
+img1.png
+img2.png
+profile-icon.png
+package-lock.json
 .vscodeignore

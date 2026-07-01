@@ -1,65 +1,83 @@
-# ngx-translate i18n Validator
+# i18n Key Validator
 
-Extensión de VS Code que valida en tiempo real las claves de `@ngx-translate/core` en archivos HTML y TypeScript, comparándolas contra los archivos de locale JSON del proyecto.
+A VS Code extension that validates i18n translation keys in real time across HTML and TypeScript files, comparing them against your locale JSON files.
 
-Soporta dos estructuras de archivos:
-- **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json` (ej. puntia-mobile)
-- **Flat:** `src/assets/i18n/{locale}.json` (ej. en.json, es.json — detección automática)
+Supports two file structures:
 
-**Versión actual: 1.9.0**
+- **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
+- **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
----
-
-## Características
-
-### Validación en tiempo real
-- Detecta todas las claves i18n usadas en templates HTML y código TypeScript
-- Subraya en **rojo** cualquier clave que no exista en el locale fuente
-- Se actualiza automáticamente al editar los archivos de locale JSON
-
-### Decoraciones inline
-- Muestra el texto de la traducción en **gris itálico** al lado de cada clave, directamente en el editor
-- Visible en todo momento sin necesidad de pasar el cursor
-- Se actualiza al cambiar de pestaña o al modificar los archivos JSON
-
-### Ctrl+Click — ir al archivo fuente
-- `Ctrl+Click` sobre cualquier clave i18n abre directamente el archivo JSON del locale fuente (`es`) en la línea exacta donde está definida
-
-### Hover inteligente
-- Pasa el cursor sobre cualquier clave i18n para ver sus traducciones en los **3 idiomas**
-- Orden fijo: **ES primero, EN segundo**, resto alfabético
-- Cada idioma incluye un link `$(go-to-file)` que abre el archivo JSON en la línea exacta de esa clave
-- ✅ Clave encontrada → muestra el texto en cada locale
-- ❌ Clave no encontrada → aviso de clave faltante con Quick Fix disponible
-
-### Autocompletado (IntelliSense)
-- Al escribir dentro de un contexto `| translate` o `translate.instant()`, sugiere todas las claves disponibles del locale fuente
-- Muestra la traducción como `detail` en el menú de sugerencias
-- Funciona en templates HTML y archivos TypeScript
-
-### Quick Fix — Crear key en todos los locales
-- Cuando una clave está marcada en rojo, aparece el bombillo 💡 de VS Code
-- La acción `💡 Crear key en todos los locales` escribe la clave faltante en los 3 archivos JSON simultáneamente (`es/`, `en/`, `fr/`)
-- El valor inicial es el último segmento de la clave en mayúsculas (placeholder para traducir)
-
-### Patrones detectados
-
-| Patrón | Ejemplo |
-|--------|---------|
-| Pipe en template | `'company.tabs.menu' \| translate` |
-| Binding con pipe | `[attr]="'company.title' \| translate"` |
-| Ternario con pipe | `(cond ? 'key.one' : 'key.two') \| translate` |
-| `translate.instant()` | `this.translate.instant('errors.notFound')` |
-| `translate.get()` | `this.translate.get('auth.login')` |
-| `translate.stream()` | `this.translate.stream('profile.title')` |
+**Version: 2.0.1**
 
 ---
 
-## Estructura de archivos
+## Screenshots
 
-La extensión detecta automáticamente el patrón usado — no requiere configuración adicional.
+![Hover with translations across all locales](https://i.imgur.com/tewZzRx.png)
+_Hover showing translations for ES, EN and FR with direct links to each locale file_
 
-### Namespaced (un archivo por feature)
+![Missing key error with Quick Fix](https://i.imgur.com/SvGLN2x.png)
+_Missing key underlined in red with diagnostic message and Quick Fix available_
+
+---
+
+## Features
+
+### Real-time Validation
+
+- Detects all i18n keys used in HTML templates and TypeScript files
+- Underlines in **red** any key that does not exist in the source locale
+- Automatically updates when locale JSON files are edited
+
+### Inline Decorations
+
+- Shows the translation text in **gray italic** next to each key, directly in the editor
+- Always visible without hovering
+- Updates when switching tabs or modifying JSON files
+
+### Ctrl+Click — Go to Source
+
+- `Ctrl+Click` on any i18n key opens the source locale JSON file at the exact line where the key is defined
+
+### Smart Hover
+
+- Hover over any i18n key to see its translations across all available locales
+- Fixed order: **ES first, EN second**, rest alphabetical
+- Each locale includes a `$(go-to-file)` link that opens the JSON file at the exact key line
+- ✅ Key found → shows the translated text per locale
+- ❌ Key missing → shows a missing key warning with Quick Fix available
+
+### Autocompletion (IntelliSense)
+
+- Suggests all available keys from the source locale when typing inside a `| translate` or `translate.instant()` context
+- Shows the translation as `detail` in the suggestion menu
+- Works in HTML templates and TypeScript files
+
+### Quick Fix — Create key in all locales
+
+- When a key is marked in red, the VS Code 💡 lightbulb appears
+- The action `💡 Create key in all locales` writes the missing key to all locale JSON files simultaneously
+- The initial value is the last key segment in uppercase (as a placeholder to translate)
+
+### Detected Patterns
+
+| Pattern               | Example                                       |
+| --------------------- | --------------------------------------------- |
+| Pipe in template      | `'company.tabs.menu' \| translate`            |
+| Binding with pipe     | `[attr]="'company.title' \| translate"`       |
+| Ternary with pipe     | `(cond ? 'key.one' : 'key.two') \| translate` |
+| `translate.instant()` | `this.translate.instant('errors.notFound')`   |
+| `translate.get()`     | `this.translate.get('auth.login')`            |
+| `translate.stream()`  | `this.translate.stream('profile.title')`      |
+
+---
+
+## File Structure
+
+The extension automatically detects the pattern used — no additional configuration required.
+
+### Namespaced (one file per feature)
+
 ```
 src/assets/i18n/
 ├── es/
@@ -73,20 +91,21 @@ src/assets/i18n/
     └── reservation.json
 ```
 
-Cada archivo tiene **un único namespace raíz**:
+Each file has **a single root namespace**:
 
 ```json
 {
   "company": {
     "tabs": {
-      "menu": "Menú",
-      "services": "Servicios"
+      "menu": "Menu",
+      "services": "Services"
     }
   }
 }
 ```
 
-### Flat (un archivo por locale)
+### Flat (one file per locale)
+
 ```
 src/assets/i18n/
 ├── es.json
@@ -96,66 +115,59 @@ src/assets/i18n/
 
 ---
 
-## Configuración
+## Configuration
 
-Agrega esto al `.vscode/settings.json` de tu proyecto:
+Add this to your project's `.vscode/settings.json`:
 
 ```json
 {
-  "ngxI18n.localesPath": "src/assets/i18n",
-  "ngxI18n.sourceLocale": "es",
-  "ngxI18n.severity": "error"
+  "i18nKV.localesPath": "src/assets/i18n",
+  "i18nKV.sourceLocale": "es",
+  "i18nKV.severity": "error"
 }
 ```
 
-| Setting | Tipo | Default | Descripción |
-|---------|------|---------|-------------|
-| `ngxI18n.localesPath` | string | `"src/assets/i18n"` | Ruta a la carpeta de locales (relativa al workspace) |
-| `ngxI18n.sourceLocale` | string | `"es"` | Locale fuente para validar claves |
-| `ngxI18n.severity` | `"error"` \| `"warning"` \| `"info"` | `"error"` | Severidad del diagnóstico para claves faltantes |
+| Setting               | Type                                 | Default             | Description                                             |
+| --------------------- | ------------------------------------ | ------------------- | ------------------------------------------------------- |
+| `i18nKV.localesPath`  | string                               | `"src/assets/i18n"` | Path to the locales folder (relative to workspace root) |
+| `i18nKV.sourceLocale` | string                               | `"es"`              | Source locale used to validate keys                     |
+| `i18nKV.severity`     | `"error"` \| `"warning"` \| `"info"` | `"error"`           | Diagnostic severity for missing i18n keys               |
 
 ---
 
-## Comandos
+## Commands
 
-| Comando | Descripción |
-|---------|-------------|
-| `ngx-i18n: Reload locale files` | Recarga manualmente todos los archivos JSON de locale |
-| `ngx-i18n: Open locale file` | Abre el archivo JSON del locale en la línea exacta de la clave (usado por el hover) |
-| `ngx-i18n: Create missing key in all locales` | Crea una clave faltante en los 3 archivos JSON (es/en/fr) |
+| Command                                     | Description                                                      |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `i18nKV: Reload locale files`               | Manually reloads all locale JSON files                           |
+| `i18nKV: Open locale file`                  | Opens the locale JSON file at the exact key line (used by hover) |
+| `i18nKV: Create missing key in all locales` | Creates a missing key in all locale JSON files                   |
 
-Accede desde la paleta de comandos: `Ctrl+Shift+P` → `ngx-i18n: ...`
-
----
-
-## Cómo funciona
-
-1. Al activarse (con 1.5s de delay para que el workspace esté listo), detecta automáticamente la estructura de archivos (namespaced vs flat)
-2. Lee todos los locales y aplana las claves anidadas en dot-notation (`company.tabs.menu`)
-3. Escanea cada archivo `.html` y `.ts` abierto en busca de patrones `| translate` y `translate.instant/get/stream()`
-4. Marca como error/warning/info cualquier clave que no esté en el locale fuente
-5. Muestra decoraciones inline con la traducción en gris itálico al lado de cada clave
-6. `Ctrl+Click` navega al archivo `es` JSON en la línea exacta de la clave
-7. Escucha cambios en los JSON de locale y re-valida automáticamente
+Access from the command palette: `Ctrl+Shift+P` → `i18nKV: ...`
 
 ---
 
-## Instalación manual
+## How it works
 
-1. Descarga el `.vsix`
-2. En VS Code: `Ctrl+Shift+P` → **Extensions: Install from VSIX...**
-3. Selecciona el archivo `.vsix`
-4. Recarga VS Code
-
-### Generar el `.vsix`
-
-```bash
-npx @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension ngx-i18n-validator-X.X.X.vsix
-```
+1. On activation, auto-detects file structure (namespaced vs flat)
+2. Reads all locales and flattens nested keys into dot-notation (`company.tabs.menu`)
+3. Scans each open `.html` and `.ts` file for `| translate` and `translate.instant/get/stream()` patterns
+4. Marks as error/warning/info any key not found in the source locale
+5. Shows inline decorations with the translation in gray italic next to each key
+6. `Ctrl+Click` navigates to the source locale JSON at the exact key line
+7. Watches locale JSON files for changes and re-validates automatically
 
 ---
 
-## Licencia
+## Manual Installation
+
+1. Download the `.vsix` file
+2. In VS Code: `Ctrl+Shift+P` → **Extensions: Install from VSIX...**
+3. Select the `.vsix` file
+4. Reload VS Code
+
+---
+
+## License
 
 MIT
