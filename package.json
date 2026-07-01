@@ -1,0 +1,57 @@
+{
+  "name": "ngx-i18n-validator",
+  "displayName": "ngx-translate i18n Validator",
+  "description": "Validates ngx-translate keys in HTML/TS files against locale JSON files ({locale}/{namespace}.json)",
+  "publisher": "RamiroCR98",
+  "version": "1.9.0",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Linters"
+  ],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "ngx-translate i18n Validator",
+      "properties": {
+        "ngxI18n.localesPath": {
+          "type": "string",
+          "default": "src/assets/i18n",
+          "description": "Path to locale folder relative to workspace root. Must contain {locale}/{namespace}.json files."
+        },
+        "ngxI18n.sourceLocale": {
+          "type": "string",
+          "default": "es",
+          "description": "Source locale used to validate keys (e.g. 'es')."
+        },
+        "ngxI18n.severity": {
+          "type": "string",
+          "enum": [
+            "error",
+            "warning",
+            "info"
+          ],
+          "default": "error",
+          "description": "Diagnostic severity for missing i18n keys."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "ngxI18n.reload",
+        "title": "ngx-i18n: Reload locale files"
+      },
+      {
+        "command": "ngxI18n.openLocaleFile",
+        "title": "ngx-i18n: Open locale file"
+      },
+      {
+        "command": "ngxI18n.createKey",
+        "title": "ngx-i18n: Create missing key in all locales"
+      }
+    ]
+  }
+}
