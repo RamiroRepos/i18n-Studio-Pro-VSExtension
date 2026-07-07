@@ -420,7 +420,7 @@ function refreshAllDecorations() {
 
 // ─── Hover ────────────────────────────────────────────────────────────────────
 
-const LOCALE_LABELS = { es: '🇪🇸 ES', en: '🇬🇧 EN', fr: '🇫🇷 FR' };
+const LOCALE_LABELS = { es: '🇪🇸 ES', en: 'EN', fr: '🇫🇷 FR' };
 
 /** Returns locale keys sorted: es first, en second, rest alphabetically */
 function sortedLocales() {
