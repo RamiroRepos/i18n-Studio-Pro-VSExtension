@@ -120,6 +120,13 @@ function activate(context) {
     );
 
     context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.showTableForFile', () => {
+            const editor = vscode.window.activeTextEditor;
+            showI18nTable(context, editor?.document ?? null);
+        })
+    );
+
+    context.subscriptions.push(
         vscode.commands.registerCommand('i18nKV.openLocaleFile', async ({ filePath, key }) => {
             if (!filePath || !fs.existsSync(filePath)) {
                 vscode.window.showWarningMessage(`i18nKV: File not found — ${filePath}`);
@@ -195,7 +202,7 @@ let localeStructure = null;
 
 function flattenKeys(obj, prefix, result) {
     for (const key of Object.keys(obj)) {
-        const fullKey = prefix ? `${prefix}.${key}` : key;
+        const fullKey = prefix != null && prefix !== '' ? `${prefix}.${key}` : key;
         const val = obj[key];
         if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
             flattenKeys(val, fullKey, result);
@@ -255,7 +262,7 @@ function loadLocaleKeys() {
                     const filePath = path.join(localePath, file);
                     try {
                         const flat = {};
-                        flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), '', flat);
+                        flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat);
                         for (const k of Object.keys(flat)) {
                             allLocaleKeys[locale][k] = flat[k];
                             keyFileMap[locale][k] = filePath;
@@ -280,7 +287,7 @@ function loadLocaleKeys() {
             keyFileMap[locale] = {};
             try {
                 const flat = {};
-                flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), '', flat);
+                flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat);
                 for (const k of Object.keys(flat)) {
                     allLocaleKeys[locale][k] = flat[k];
                     keyFileMap[locale][k] = filePath;
@@ -724,10 +731,11 @@ function provideLocaleJsonHover(doc, position) {
     // Determine which locale this file belongs to
     const relPath = path.relative(localesAbsPath, doc.uri.fsPath);
     const parts = relPath.split(path.sep);
+    const effectiveStructure = localeStructure ?? detectLocaleStructure(localesAbsPath);
     let fileLocale;
-    if (localeStructure === 'namespaced' && parts.length >= 2) {
+    if (effectiveStructure === 'namespaced' && parts.length >= 2) {
         fileLocale = parts[0]; // e.g. "es"
-    } else if (localeStructure === 'flat') {
+    } else if (effectiveStructure === 'flat') {
         fileLocale = path.basename(doc.uri.fsPath, '.json'); // e.g. "es"
     }
     if (!fileLocale || !allLocaleKeys[fileLocale]) return null;
@@ -793,9 +801,8 @@ function resolveJsonKeyAtPosition(doc, position) {
     // Walk backwards through the document to reconstruct the full key path
     const segments = [keySegment];
     let currentIndent = lineText.match(/^(\s*)/)[1].length;
-    let lineIdx = position.line - 1;
 
-    while (lineIdx >= 0 && currentIndent > 0) {
+    for (let lineIdx = position.line - 1; lineIdx >= 0 && currentIndent > 0; lineIdx--) {
         const prevLine = doc.lineAt(lineIdx).text;
         const prevIndent = prevLine.match(/^(\s*)/)[1].length;
 
@@ -806,11 +813,11 @@ function resolveJsonKeyAtPosition(doc, position) {
                 segments.unshift(parentKeyMatch[1]);
                 currentIndent = prevIndent;
             } else {
-                // Could be the opening brace of a nested object without a key (array or root)
+                // Root opening brace or array — stop walking
                 break;
             }
         }
-        lineIdx--;
+        // If prevIndent >= currentIndent, it's a sibling — keep walking up
     }
 
     return segments.join('.');
@@ -821,11 +828,14 @@ function resolveJsonKeyAtPosition(doc, position) {
 /**
  * Abre (o revela) el Webview panel con la tabla de keys × idiomas.
  * @param {vscode.ExtensionContext} context
+ * @param {vscode.TextDocument | null} filterDoc  Si se pasa, filtra por las keys de ese archivo
  */
-function showI18nTable(context) {
+function showI18nTable(context, filterDoc = null) {
+    const data = buildTableData(filterDoc);
+
     if (tablePanel) {
         tablePanel.reveal(vscode.ViewColumn.One);
-        tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+        tablePanel.webview.postMessage({ type: 'update', data });
         return;
     }
 
@@ -837,11 +847,16 @@ function showI18nTable(context) {
     );
 
     tablePanel.webview.html = getTableHtml(tablePanel.webview);
-    tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+    // Small delay so the webview JS has time to set up the message listener before we send data
+    setTimeout(() => {
+        if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data });
+    }, 300);
 
     tablePanel.webview.onDidReceiveMessage(msg => {
         if (msg.type === 'openFile') {
             vscode.commands.executeCommand('i18nKV.openLocaleFile', { filePath: msg.filePath, key: msg.key });
+        } else if (msg.type === 'createKey') {
+            createKeyInAllLocales(msg.key);
         }
     }, undefined, context.subscriptions);
 
@@ -850,9 +865,10 @@ function showI18nTable(context) {
 
 /**
  * Builds the data payload for the table webview.
- * @returns {{ locales: string[], rows: { key: string, values: Record<string, string> }[] }}
+ * @param {vscode.TextDocument | null} filterDoc  If provided, filters to keys used in that file
+ * @returns {{ locales: string[], rows: object[], fileName: string|null, suggestions: string[] }}
  */
-function buildTableData() {
+function buildTableData(filterDoc = null) {
     const locales = sortedLocales();
     const allKeys = new Set();
     for (const locale of locales) {
@@ -861,7 +877,22 @@ function buildTableData() {
         }
     }
 
-    const rows = Array.from(allKeys).sort().map(key => ({
+    let fileKeys = null;
+    let fileName = null;
+    let suggestions = [];
+
+    if (filterDoc && ['html', 'typescript'].includes(filterDoc.languageId)) {
+        fileName = path.basename(filterDoc.uri.fsPath);
+        const usages = extractI18nUsages(filterDoc);
+        fileKeys = new Set(usages.map(u => u.key));
+        suggestions = extractPlainTextSuggestions(filterDoc);
+    }
+
+    const sourceRows = fileKeys
+        ? Array.from(fileKeys).sort()
+        : Array.from(allKeys).sort();
+
+    const rows = sourceRows.map(key => ({
         key,
         values: Object.fromEntries(
             locales.map(locale => [locale, allLocaleKeys[locale]?.[key] ?? null])
@@ -871,7 +902,44 @@ function buildTableData() {
         ),
     }));
 
-    return { locales, rows };
+    return { locales, rows, fileName, suggestions };
+}
+
+/**
+ * Scans an HTML/TS document for plain text strings that are NOT already wrapped
+ * in a translate pipe or translate service call, and returns them as suggestions.
+ * @param {vscode.TextDocument} doc
+ * @returns {string[]}
+ */
+function extractPlainTextSuggestions(doc) {
+    if (doc.languageId !== 'html') return [];
+    const text = doc.getText();
+    const suggestions = new Set();
+
+    // Match text content between HTML tags that doesn't contain | translate
+    // e.g.  <button>Save</button>  or  <label>First name</label>
+    const tagContentRe = />([^<>{}"']+)</g;
+    let m;
+    while ((m = tagContentRe.exec(text)) !== null) {
+        const raw = m[1].trim();
+        // Skip empty, whitespace-only, template expressions, and things already translated
+        if (!raw || raw.length < 3) continue;
+        if (/^\d+$/.test(raw)) continue;          // pure numbers
+        if (/\{\{/.test(raw)) continue;            // angular template expression
+        if (/\|\s*translate/.test(raw)) continue;  // already translated
+        suggestions.add(raw);
+    }
+
+    // Also match placeholder/title/label attributes with plain text
+    const attrRe = /(?:placeholder|title|label|aria-label)\s*=\s*"([^"{}|]+)"/g;
+    while ((m = attrRe.exec(text)) !== null) {
+        const raw = m[1].trim();
+        if (raw && raw.length >= 3 && !/\{\{/.test(raw)) {
+            suggestions.add(raw);
+        }
+    }
+
+    return Array.from(suggestions).slice(0, 30); // cap at 30
 }
 
 /**
@@ -893,17 +961,25 @@ function getTableHtml(_webview) {
     --border: var(--vscode-panel-border, #444);
     --header-bg: var(--vscode-editorGroupHeader-tabsBackground);
     --row-hover: var(--vscode-list-hoverBackground);
-    --missing-color: var(--vscode-editorWarning-foreground, #f0a);
+    --missing-color: var(--vscode-editorWarning-foreground, #e8a400);
     --input-bg: var(--vscode-input-background);
     --input-fg: var(--vscode-input-foreground);
     --input-border: var(--vscode-input-border);
     --badge-bg: var(--vscode-badge-background);
     --badge-fg: var(--vscode-badge-foreground);
     --link: var(--vscode-textLink-foreground);
+    --btn-bg: var(--vscode-button-background);
+    --btn-fg: var(--vscode-button-foreground);
+    --btn-hover: var(--vscode-button-hoverBackground);
+    --section-bg: var(--vscode-sideBar-background, #1e1e1e);
+    --tag-bg: var(--vscode-badge-background);
+    --tag-fg: var(--vscode-badge-foreground);
   }
   * { box-sizing: border-box; }
   body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--fg); font-family: var(--vscode-font-family); font-size: 13px; }
-  h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .file-context { font-size: 11px; opacity: 0.6; margin-bottom: 10px; }
+  .file-context span { font-family: monospace; opacity: 1; font-weight: 600; }
   .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
   .toolbar input {
     flex: 1; min-width: 180px; padding: 4px 8px; border-radius: 3px;
@@ -912,7 +988,7 @@ function getTableHtml(_webview) {
   }
   .toolbar label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
   .badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 7px; font-size: 11px; }
-  .table-wrap { overflow: auto; max-height: calc(100vh - 120px); border: 1px solid var(--border); border-radius: 4px; }
+  .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
   table { width: 100%; border-collapse: collapse; min-width: 400px; }
   thead th {
     position: sticky; top: 0; z-index: 2;
@@ -931,10 +1007,42 @@ function getTableHtml(_webview) {
   }
   .open-btn:hover { opacity: 1; text-decoration: underline; }
   .no-results { padding: 24px; text-align: center; opacity: 0.5; }
+
+  /* Suggestions section */
+  .suggestions-section { margin-top: 16px; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .suggestions-header {
+    background: var(--section-bg); padding: 7px 12px;
+    font-weight: 600; font-size: 12px; display: flex; align-items: center; gap: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .suggestions-header .icon { opacity: 0.7; }
+  .suggestions-list { padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .suggestion-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--tag-bg); color: var(--tag-fg);
+    border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: default;
+    border: 1px solid transparent;
+  }
+  .suggestion-chip:hover { border-color: var(--link); }
+  .suggestion-chip button {
+    background: none; border: none; cursor: pointer; color: var(--link);
+    font-size: 11px; padding: 0; line-height: 1;
+  }
+  .suggestion-chip button:hover { text-decoration: underline; }
+  .layout { display: flex; flex-direction: column; height: 100vh; padding: 12px 16px; gap: 0; overflow: hidden; }
+  .layout h2 { flex-shrink: 0; }
+  .layout .file-context { flex-shrink: 0; }
+  .layout .toolbar { flex-shrink: 0; }
+  .layout .table-wrap { flex: 1; min-height: 0; }
+  .layout .suggestions-section { flex-shrink: 0; max-height: 160px; overflow-y: auto; }
 </style>
 </head>
 <body>
+<div class="layout">
 <h2>i18n Key Table <span class="badge" id="count">0</span></h2>
+<div class="file-context" id="fileContext" style="display:none">
+  Mostrando keys de: <span id="fileName"></span>
+</div>
 <div class="toolbar">
   <input id="search" type="text" placeholder="Buscar key o valor..." autocomplete="off" />
   <label><input type="checkbox" id="onlyMissing" /> Solo faltantes</label>
@@ -946,6 +1054,13 @@ function getTableHtml(_webview) {
   </table>
   <div class="no-results" id="noResults" style="display:none">Sin resultados</div>
 </div>
+<div class="suggestions-section" id="suggestionsSection" style="display:none">
+  <div class="suggestions-header">
+    <span class="icon">💡</span> Textos sin traducir detectados — click para crear key
+  </div>
+  <div class="suggestions-list" id="suggestionsList"></div>
+</div>
+</div>
 <script>
   const vscode = acquireVsCodeApi();
   let _locales = [];
@@ -953,12 +1068,49 @@ function getTableHtml(_webview) {
 
   window.addEventListener('message', e => {
     if (e.data.type === 'update') {
-      _locales = e.data.data.locales;
-      _rows = e.data.data.rows;
+      const { locales, rows, fileName, suggestions } = e.data.data;
+      _locales = locales;
+      _rows = rows;
       buildHeader();
       renderRows();
+      renderFileContext(fileName);
+      renderSuggestions(suggestions || []);
     }
   });
+
+  function renderFileContext(fileName) {
+    const ctx = document.getElementById('fileContext');
+    const nameEl = document.getElementById('fileName');
+    if (fileName) {
+      nameEl.textContent = fileName;
+      ctx.style.display = 'block';
+    } else {
+      ctx.style.display = 'none';
+    }
+  }
+
+  function renderSuggestions(suggestions) {
+    const section = document.getElementById('suggestionsSection');
+    const list = document.getElementById('suggestionsList');
+    list.innerHTML = '';
+    if (!suggestions.length) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+    for (const text of suggestions) {
+      const chip = document.createElement('span');
+      chip.className = 'suggestion-chip';
+      const label = document.createElement('span');
+      label.textContent = text.length > 40 ? text.slice(0, 40) + '…' : text;
+      label.title = text;
+      const btn = document.createElement('button');
+      btn.textContent = '+ crear key';
+      btn.addEventListener('click', () => {
+        vscode.postMessage({ type: 'createKey', key: text });
+      });
+      chip.appendChild(label);
+      chip.appendChild(btn);
+      list.appendChild(chip);
+    }
+  }
 
   function buildHeader() {
     const thead = document.getElementById('thead');
@@ -973,10 +1125,6 @@ function getTableHtml(_webview) {
     }
     thead.innerHTML = '';
     thead.appendChild(tr);
-  }
-
-  function escapeHtml(str) {
-    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   function renderRows() {
@@ -1012,7 +1160,9 @@ function getTableHtml(_webview) {
           td.className = 'missing';
           td.textContent = '(missing)';
         } else {
-          td.textContent = String(val);
+          const span = document.createElement('span');
+          span.textContent = String(val);
+          td.appendChild(span);
           if (filePath) {
             const btn = document.createElement('button');
             btn.className = 'open-btn';
