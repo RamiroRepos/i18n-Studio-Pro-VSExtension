@@ -1,0 +1,12 @@
+{
+  "title": "Dashboard",
+  "stats": {
+    "users": "Active users",
+    "revenue": "Monthly revenue",
+    "orders": "Pending orders"
+  },
+  "chart": {
+    "label": "Sales",
+    "noData": "No data available"
+  }
+}

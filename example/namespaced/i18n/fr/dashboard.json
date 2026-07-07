@@ -1,0 +1,10 @@
+{
+  "title": "Tableau de bord",
+  "stats": {
+    "users": "Utilisateurs actifs",
+    "revenue": "Revenus du mois"
+  },
+  "chart": {
+    "label": "Ventes"
+  }
+}

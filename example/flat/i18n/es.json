@@ -1,0 +1,23 @@
+{
+  "app": {
+    "title": "Mi Aplicación",
+    "welcome": "Bienvenido",
+    "logout": "Cerrar sesión"
+  },
+  "nav": {
+    "home": "Inicio",
+    "profile": "Perfil",
+    "settings": "Configuración"
+  },
+  "errors": {
+    "notFound": "Página no encontrada",
+    "unauthorized": "No autorizado",
+    "serverError": "Error del servidor"
+  },
+  "actions": {
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar"
+  }
+}

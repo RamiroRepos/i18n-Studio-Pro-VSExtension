@@ -7,6 +7,9 @@ const path = require('path');
 /** @type {Record<string, Record<string, any>>} */
 let allLocaleKeys = {};
 
+/** @type {vscode.WebviewPanel | undefined} */
+let tablePanel;
+
 /** @type {Record<string, Record<string, string>>} locale → key → absolute file path */
 let keyFileMap = {};
 
@@ -38,8 +41,8 @@ function activate(context) {
     });
     context.subscriptions.push(inlineDecorationType);
 
-    // Defer initial load so the workspace filesystem is fully ready
-    setTimeout(() => {
+    // Initial load — try immediately, then retry once the workspace is fully ready
+    function initialLoad() {
         loadLocaleKeys();
         revalidateAll();
         refreshAllDecorations();
@@ -47,13 +50,29 @@ function activate(context) {
             validateDocument(vscode.window.activeTextEditor.document);
             updateDecorations(vscode.window.activeTextEditor);
         }
-    }, 1500);
+    }
+
+    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        initialLoad();
+    }
+    // Retry after workspace is fully settled in case files weren't ready yet
+    setTimeout(initialLoad, 1500);
+
+    // Reload when the user opens a new workspace folder
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(() => initialLoad())
+    );
 
     // Watch locale JSON changes
     const watcher = vscode.workspace.createFileSystemWatcher('**/*.json');
-    watcher.onDidChange(uri => { if (isLocaleFile(uri)) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); } });
-    watcher.onDidCreate(uri => { if (isLocaleFile(uri)) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); } });
-    watcher.onDidDelete(uri => { if (isLocaleFile(uri)) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); } });
+    const onLocaleChange = uri => {
+        if (!isLocaleFile(uri)) return;
+        loadLocaleKeys(); revalidateAll(); refreshAllDecorations();
+        if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+    };
+    watcher.onDidChange(onLocaleChange);
+    watcher.onDidCreate(onLocaleChange);
+    watcher.onDidDelete(onLocaleChange);
     context.subscriptions.push(watcher);
 
     // Validate + decorate on document events
@@ -81,7 +100,7 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('ngxI18n')) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); }
+            if (e.affectsConfiguration('i18nKV')) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); }
         })
     );
 
@@ -91,6 +110,12 @@ function activate(context) {
         vscode.commands.registerCommand('i18nKV.reload', () => {
             loadLocaleKeys(); revalidateAll(); refreshAllDecorations();
             vscode.window.showInformationMessage('i18nKV: Locale files reloaded ✓');
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.showTable', () => {
+            showI18nTable(context);
         })
     );
 
@@ -132,7 +157,8 @@ function activate(context) {
         vscode.languages.registerCodeActionsProvider(langs, { provideCodeActions }, {
             providedCodeActionKinds: [vscode.CodeActionKind.QuickFix]
         }),
-        vscode.languages.registerDefinitionProvider(langs, { provideDefinition })
+        vscode.languages.registerDefinitionProvider(langs, { provideDefinition }),
+        vscode.languages.registerHoverProvider({ language: 'json' }, { provideHover: provideLocaleJsonHover })
     );
 }
 
@@ -141,7 +167,7 @@ function deactivate() {}
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 function getConfig() {
-    const cfg = vscode.workspace.getConfiguration('ngxI18n');
+    const cfg = vscode.workspace.getConfiguration('i18nKV');
     return {
         localesPath: cfg.get('localesPath', 'src/assets/i18n'),
         sourceLocale: cfg.get('sourceLocale', 'es'),
@@ -678,6 +704,342 @@ function setNestedKey(obj, segments, value) {
         current = current[seg];
     }
     current[segments[segments.length - 1]] = value;
+}
+
+// ─── Hover en archivos JSON de locale ────────────────────────────────────────
+
+/**
+ * Hover provider para archivos .json dentro de la carpeta de locales.
+ * Al posicionarse sobre una key (string en posición de clave), muestra las
+ * traducciones de todos los idiomas disponibles.
+ *
+ * @param {vscode.TextDocument} doc
+ * @param {vscode.Position} position
+ * @returns {vscode.Hover | null}
+ */
+function provideLocaleJsonHover(doc, position) {
+    if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return null;
+    if (Object.keys(allLocaleKeys).length === 0) return null;
+
+    // Determine which locale this file belongs to
+    const relPath = path.relative(localesAbsPath, doc.uri.fsPath);
+    const parts = relPath.split(path.sep);
+    let fileLocale;
+    if (localeStructure === 'namespaced' && parts.length >= 2) {
+        fileLocale = parts[0]; // e.g. "es"
+    } else if (localeStructure === 'flat') {
+        fileLocale = path.basename(doc.uri.fsPath, '.json'); // e.g. "es"
+    }
+    if (!fileLocale || !allLocaleKeys[fileLocale]) return null;
+
+    // Find what key the cursor is on.
+    // JSON keys look like:  "company.tabs.menu": "value"  (flat)
+    // or nested:            "menu": "value"  at some nesting level
+    // We reconstruct the full dot-notation key by walking the document text.
+    const fullKey = resolveJsonKeyAtPosition(doc, position);
+    if (!fullKey) return null;
+
+    // Check if this key exists in any locale
+    const existsInAny = Object.values(allLocaleKeys).some(keys => fullKey in keys);
+    if (!existsInAny) return null;
+
+    const md = new vscode.MarkdownString('', true);
+    md.isTrusted = true;
+
+    md.appendMarkdown(`**ngx-i18n** \`${fullKey}\`\n\n---\n\n`);
+
+    for (const locale of sortedLocales()) {
+        if (locale === fileLocale) continue; // skip the current file's locale
+        const label = LOCALE_LABELS[locale] ?? `🌐 ${locale.toUpperCase()}`;
+        const val = allLocaleKeys[locale]?.[fullKey];
+        const filePath = keyFileMap[locale]?.[fullKey];
+        const cmdArgs = encodeURIComponent(JSON.stringify({ filePath, key: fullKey }));
+        const openLink = filePath
+            ? `[$(go-to-file)](command:i18nKV.openLocaleFile?${cmdArgs} "Abrir en ${locale}")`
+            : '';
+
+        md.appendMarkdown(val !== undefined
+            ? `${label} &nbsp; ${String(val)} &nbsp; ${openLink}\n\n`
+            : `${label} &nbsp; *(missing)* &nbsp; ${openLink}\n\n`
+        );
+    }
+
+    return new vscode.Hover(md);
+}
+
+/**
+ * Given a cursor position inside a JSON document, reconstructs the full
+ * dot-notation key path (e.g. "company.tabs.menu").
+ * Works for both flat keys ("company.tabs.menu": ...) and nested objects.
+ *
+ * @param {vscode.TextDocument} doc
+ * @param {vscode.Position} position
+ * @returns {string | null}
+ */
+function resolveJsonKeyAtPosition(doc, position) {
+    const lineText = doc.lineAt(position.line).text;
+
+    // The cursor must be over a JSON key (a quoted string before a colon)
+    const keyOnLineMatch = lineText.match(/^\s*"([^"]+)"\s*:/);
+    if (!keyOnLineMatch) return null;
+
+    const keySegment = keyOnLineMatch[1];
+
+    // Check if the cursor is actually inside the key string
+    const keyStart = lineText.indexOf(`"${keySegment}"`);
+    const keyEnd = keyStart + keySegment.length + 2; // +2 for quotes
+    if (position.character < keyStart || position.character > keyEnd) return null;
+
+    // Walk backwards through the document to reconstruct the full key path
+    const segments = [keySegment];
+    let currentIndent = lineText.match(/^(\s*)/)[1].length;
+    let lineIdx = position.line - 1;
+
+    while (lineIdx >= 0 && currentIndent > 0) {
+        const prevLine = doc.lineAt(lineIdx).text;
+        const prevIndent = prevLine.match(/^(\s*)/)[1].length;
+
+        if (prevIndent < currentIndent) {
+            // This line could be a parent key (object opener: "key": {)
+            const parentKeyMatch = prevLine.match(/^\s*"([^"]+)"\s*:\s*\{/);
+            if (parentKeyMatch) {
+                segments.unshift(parentKeyMatch[1]);
+                currentIndent = prevIndent;
+            } else {
+                // Could be the opening brace of a nested object without a key (array or root)
+                break;
+            }
+        }
+        lineIdx--;
+    }
+
+    return segments.join('.');
+}
+
+// ─── Vista tabla i18n ─────────────────────────────────────────────────────────
+
+/**
+ * Abre (o revela) el Webview panel con la tabla de keys × idiomas.
+ * @param {vscode.ExtensionContext} context
+ */
+function showI18nTable(context) {
+    if (tablePanel) {
+        tablePanel.reveal(vscode.ViewColumn.One);
+        tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+        return;
+    }
+
+    tablePanel = vscode.window.createWebviewPanel(
+        'i18nTable',
+        'i18n Key Table',
+        vscode.ViewColumn.One,
+        { enableScripts: true, retainContextWhenHidden: true }
+    );
+
+    tablePanel.webview.html = getTableHtml(tablePanel.webview);
+    tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+
+    tablePanel.webview.onDidReceiveMessage(msg => {
+        if (msg.type === 'openFile') {
+            vscode.commands.executeCommand('i18nKV.openLocaleFile', { filePath: msg.filePath, key: msg.key });
+        }
+    }, undefined, context.subscriptions);
+
+    tablePanel.onDidDispose(() => { tablePanel = undefined; }, null, context.subscriptions);
+}
+
+/**
+ * Builds the data payload for the table webview.
+ * @returns {{ locales: string[], rows: { key: string, values: Record<string, string> }[] }}
+ */
+function buildTableData() {
+    const locales = sortedLocales();
+    const allKeys = new Set();
+    for (const locale of locales) {
+        for (const key of Object.keys(allLocaleKeys[locale] ?? {})) {
+            allKeys.add(key);
+        }
+    }
+
+    const rows = Array.from(allKeys).sort().map(key => ({
+        key,
+        values: Object.fromEntries(
+            locales.map(locale => [locale, allLocaleKeys[locale]?.[key] ?? null])
+        ),
+        files: Object.fromEntries(
+            locales.map(locale => [locale, keyFileMap[locale]?.[key] ?? null])
+        ),
+    }));
+
+    return { locales, rows };
+}
+
+/**
+ * Returns the HTML for the i18n table webview.
+ * @param {vscode.Webview} _webview
+ * @returns {string}
+ */
+function getTableHtml(_webview) {
+    return /* html */`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>i18n Key Table</title>
+<style>
+  :root {
+    --bg: var(--vscode-editor-background);
+    --fg: var(--vscode-editor-foreground);
+    --border: var(--vscode-panel-border, #444);
+    --header-bg: var(--vscode-editorGroupHeader-tabsBackground);
+    --row-hover: var(--vscode-list-hoverBackground);
+    --missing-color: var(--vscode-editorWarning-foreground, #f0a);
+    --input-bg: var(--vscode-input-background);
+    --input-fg: var(--vscode-input-foreground);
+    --input-border: var(--vscode-input-border);
+    --badge-bg: var(--vscode-badge-background);
+    --badge-fg: var(--vscode-badge-foreground);
+    --link: var(--vscode-textLink-foreground);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px 16px; background: var(--bg); color: var(--fg); font-family: var(--vscode-font-family); font-size: 13px; }
+  h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+  .toolbar input {
+    flex: 1; min-width: 180px; padding: 4px 8px; border-radius: 3px;
+    background: var(--input-bg); color: var(--input-fg);
+    border: 1px solid var(--input-border, var(--border)); outline: none; font-size: 13px;
+  }
+  .toolbar label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 7px; font-size: 11px; }
+  .table-wrap { overflow: auto; max-height: calc(100vh - 120px); border: 1px solid var(--border); border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; min-width: 400px; }
+  thead th {
+    position: sticky; top: 0; z-index: 2;
+    background: var(--header-bg); text-align: left;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+    font-weight: 600; white-space: nowrap;
+  }
+  thead th:first-child { min-width: 220px; }
+  tbody tr:hover { background: var(--row-hover); }
+  td { padding: 4px 10px; border-bottom: 1px solid var(--border, #3334); vertical-align: top; max-width: 320px; word-break: break-word; }
+  td.key-cell { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; white-space: nowrap; }
+  td.missing { color: var(--missing-color); font-style: italic; }
+  .open-btn {
+    background: none; border: none; cursor: pointer; color: var(--link);
+    padding: 0 3px; font-size: 11px; vertical-align: middle; opacity: 0.7;
+  }
+  .open-btn:hover { opacity: 1; text-decoration: underline; }
+  .no-results { padding: 24px; text-align: center; opacity: 0.5; }
+</style>
+</head>
+<body>
+<h2>i18n Key Table <span class="badge" id="count">0</span></h2>
+<div class="toolbar">
+  <input id="search" type="text" placeholder="Buscar key o valor..." autocomplete="off" />
+  <label><input type="checkbox" id="onlyMissing" /> Solo faltantes</label>
+</div>
+<div class="table-wrap">
+  <table id="tbl">
+    <thead id="thead"></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div class="no-results" id="noResults" style="display:none">Sin resultados</div>
+</div>
+<script>
+  const vscode = acquireVsCodeApi();
+  let _locales = [];
+  let _rows = [];
+
+  window.addEventListener('message', e => {
+    if (e.data.type === 'update') {
+      _locales = e.data.data.locales;
+      _rows = e.data.data.rows;
+      buildHeader();
+      renderRows();
+    }
+  });
+
+  function buildHeader() {
+    const thead = document.getElementById('thead');
+    const tr = document.createElement('tr');
+    const thKey = document.createElement('th');
+    thKey.textContent = 'Key';
+    tr.appendChild(thKey);
+    for (const locale of _locales) {
+      const th = document.createElement('th');
+      th.textContent = locale.toUpperCase();
+      tr.appendChild(th);
+    }
+    thead.innerHTML = '';
+    thead.appendChild(tr);
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function renderRows() {
+    const search = document.getElementById('search').value.toLowerCase().trim();
+    const onlyMissing = document.getElementById('onlyMissing').checked;
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '';
+
+    let count = 0;
+    for (const row of _rows) {
+      const hasMissing = _locales.some(l => row.values[l] === null || row.values[l] === undefined);
+      if (onlyMissing && !hasMissing) continue;
+
+      if (search) {
+        const inKey = row.key.toLowerCase().includes(search);
+        const inVals = Object.values(row.values).some(v => v && String(v).toLowerCase().includes(search));
+        if (!inKey && !inVals) continue;
+      }
+
+      const tr = document.createElement('tr');
+
+      const tdKey = document.createElement('td');
+      tdKey.className = 'key-cell';
+      tdKey.title = row.key;
+      tdKey.textContent = row.key;
+      tr.appendChild(tdKey);
+
+      for (const locale of _locales) {
+        const td = document.createElement('td');
+        const val = row.values[locale];
+        const filePath = row.files[locale];
+        if (val === null || val === undefined) {
+          td.className = 'missing';
+          td.textContent = '(missing)';
+        } else {
+          td.textContent = String(val);
+          if (filePath) {
+            const btn = document.createElement('button');
+            btn.className = 'open-btn';
+            btn.title = 'Abrir en editor';
+            btn.textContent = '↗';
+            btn.addEventListener('click', () => {
+              vscode.postMessage({ type: 'openFile', filePath, key: row.key });
+            });
+            td.appendChild(btn);
+          }
+        }
+        tr.appendChild(td);
+      }
+
+      tbody.appendChild(tr);
+      count++;
+    }
+
+    document.getElementById('count').textContent = count;
+    document.getElementById('noResults').style.display = count === 0 ? 'block' : 'none';
+  }
+
+  document.getElementById('search').addEventListener('input', renderRows);
+  document.getElementById('onlyMissing').addEventListener('change', renderRows);
+</script>
+</body>
+</html>`;
 }
 
 // ─── Exports ──────────────────────────────────────────────────────────────────

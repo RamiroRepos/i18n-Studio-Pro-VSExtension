@@ -1,0 +1,21 @@
+{
+  "app": {
+    "title": "Mon Application",
+    "welcome": "Bienvenue",
+    "logout": "Se déconnecter"
+  },
+  "nav": {
+    "home": "Accueil",
+    "profile": "Profil",
+    "settings": "Paramètres"
+  },
+  "errors": {
+    "notFound": "Page non trouvée",
+    "serverError": "Erreur serveur"
+  },
+  "actions": {
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer"
+  }
+}

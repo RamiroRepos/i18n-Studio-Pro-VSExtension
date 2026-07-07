@@ -1,0 +1,26 @@
+<!-- Ejemplo namespaced: los JSON están en i18n/es/, en/, fr/ con archivos por namespace -->
+
+<h1>{{ 'dashboard.title' | translate }}</h1>
+
+<div class="stats">
+  <span>{{ 'dashboard.stats.users' | translate }}</span>
+  <span>{{ 'dashboard.stats.revenue' | translate }}</span>
+  <span>{{ 'dashboard.stats.orders' | translate }}</span>
+</div>
+
+<div class="chart">
+  <p>{{ 'dashboard.chart.label' | translate }}</p>
+  <p>{{ 'dashboard.chart.noData' | translate }}</p>
+</div>
+
+<div class="actions">
+  <button>{{ 'common.save' | translate }}</button>
+  <button>{{ 'common.cancel' | translate }}</button>
+  <button>{{ 'common.delete' | translate }}</button>
+</div>
+
+<!-- Key que falta en fr -->
+<p>{{ 'common.confirm' | translate }}</p>
+
+<!-- Key que no existe en ningún locale → diagnostic error -->
+<p>{{ 'dashboard.stats.missing' | translate }}</p>

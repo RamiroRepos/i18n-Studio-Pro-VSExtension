@@ -1,0 +1,23 @@
+{
+  "app": {
+    "title": "My Application",
+    "welcome": "Welcome",
+    "logout": "Log out"
+  },
+  "nav": {
+    "home": "Home",
+    "profile": "Profile",
+    "settings": "Settings"
+  },
+  "errors": {
+    "notFound": "Page not found",
+    "unauthorized": "Unauthorized",
+    "serverError": "Server error"
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "title": "Panel de control",
+  "stats": {
+    "users": "Usuarios activos",
+    "revenue": "Ingresos del mes",
+    "orders": "Pedidos pendientes"
+  },
+  "chart": {
+    "label": "Ventas",
+    "noData": "Sin datos disponibles"
+  }
+}

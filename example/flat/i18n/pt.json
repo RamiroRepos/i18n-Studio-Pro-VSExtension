@@ -1,0 +1,18 @@
+{
+  "app": {
+    "title": "Minha Aplicação",
+    "welcome": "Bem-vindo"
+  },
+  "nav": {
+    "home": "Início",
+    "settings": "Configurações"
+  },
+  "errors": {
+    "notFound": "Página não encontrada",
+    "unauthorized": "Não autorizado"
+  },
+  "actions": {
+    "save": "Salvar",
+    "cancel": "Cancelar"
+  }
+}

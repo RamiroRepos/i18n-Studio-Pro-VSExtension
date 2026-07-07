@@ -1,0 +1,23 @@
+<!-- Ejemplo flat: los JSON están en i18n/es.json, en.json, fr.json, pt.json -->
+
+<h1>{{ 'app.title' | translate }}</h1>
+<p>{{ 'app.welcome' | translate }}</p>
+
+<nav>
+  <a>{{ 'nav.home' | translate }}</a>
+  <a>{{ 'nav.profile' | translate }}</a>
+  <a>{{ 'nav.settings' | translate }}</a>
+</nav>
+
+<div class="actions">
+  <button>{{ 'actions.save' | translate }}</button>
+  <button>{{ 'actions.cancel' | translate }}</button>
+  <button>{{ 'actions.delete' | translate }}</button>
+  <button>{{ 'actions.edit' | translate }}</button>
+</div>
+
+<!-- Esta key existe solo en es/en/pt pero no en fr -->
+<span>{{ 'errors.unauthorized' | translate }}</span>
+
+<!-- Esta key no existe en ningún locale → diagnostic error -->
+<span>{{ 'missing.key.example' | translate }}</span>
