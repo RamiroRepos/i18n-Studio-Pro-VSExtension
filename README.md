@@ -1,5 +1,8 @@
 # i18n Studio Pro
 
+[![Report a Bug](https://img.shields.io/badge/Report%20a%20bug-GitHub%20Issues-red?style=flat-square&logo=github)](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new?labels=bug&template=bug_report.md&title=[Bug]+)
+[![Request Feature](https://img.shields.io/badge/Request%20feature-GitHub%20Issues-blue?style=flat-square&logo=github)](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new?labels=enhancement&title=[Feature]+)
+
 A full-featured i18n management suite for VS Code. Real-time validation, inline translations, key table, hover across locales, CodeLens, sort keys, and plain-text detection. Supports ngx-translate and similar setups.
 
 Supports two file structures:
@@ -8,6 +11,8 @@ Supports two file structures:
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
 **Version: 2.0.9**
+
+**Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
 ---
 
