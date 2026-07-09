@@ -1524,6 +1524,10 @@ async function runProjectScan() {
     const plainTextByFile = {};
     const BATCH = 5;
 
+    // Adaptive yield: starts at 20ms, adjusts based on how long each file takes.
+    // Target: keep each file under 30ms of total work so the UI stays responsive.
+    let yieldMs = 20;
+
     for (let i = 0; i < uris.length; i += BATCH) {
         if (scanCancelled) {
             log('Scan cancelled by user');
@@ -1532,6 +1536,7 @@ async function runProjectScan() {
         const batch = uris.slice(i, i + BATCH);
         for (const uri of batch) {
             if (scanCancelled) break;
+            const fileStart = Date.now();
             try {
                 const doc = await vscode.workspace.openTextDocument(uri);
                 for (const { key, range } of extractI18nUsages(doc)) {
@@ -1551,8 +1556,10 @@ async function runProjectScan() {
             } catch (e) {
                 log(`Error processing ${vscode.workspace.asRelativePath(uri)}: ${e.message}`);
             }
-            // yield to event loop after every file to keep VS Code responsive
-            await new Promise(r => setTimeout(r, 50));
+            // Adaptive yield: if processing took long, reduce yield; if fast, give more breathing room
+            const elapsed = Date.now() - fileStart;
+            yieldMs = elapsed > 30 ? Math.max(5, yieldMs - 5) : Math.min(80, yieldMs + 3);
+            await new Promise(r => setTimeout(r, yieldMs));
         }
         sidebarView.webview.postMessage({ type: 'scanProgress', done: Math.min(i + BATCH, total), total });
     }
