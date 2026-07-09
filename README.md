@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.0.9**
+**Version: 2.1.0**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -35,7 +35,9 @@ Supports two file structures:
 | **Sidebar panel** | Activity Bar | Configuration UI, full project scan, and GitHub issue reporter |
 | **Project Scan** | Sidebar | Scans all HTML/TS files, lists missing keys and untranslated text |
 | **Config UI** | Sidebar | Edit `localesPath`, `sourceLocale`, `severity` without touching JSON |
-| **Report Issue** | Sidebar | Opens a pre-filled GitHub issue with editor context attached |
+| **Add i18n Key form** | Sidebar | Create a new key with per-locale inputs and auto-translate |
+| **Auto-translate** | Sidebar | Fills translations via MyMemory API — one locale or all at once |
+| **Report Issue** | Sidebar | Opens a pre-filled GitHub issue with editor context and scan logs |
 
 ---
 
@@ -104,6 +106,20 @@ A **🌐 globe icon** appears in the editor toolbar when viewing an `.html` or `
 > 📸 _Screenshot: globe button in editor toolbar, table filtered to file keys_ — proximamente
 
 > 📸 _Screenshot: "Textos sin traducir" section with plain text chips and "+ crear key" buttons_ — proximamente
+
+### Add i18n Key — sidebar form
+
+The **✚ Add i18n Key** section in the sidebar provides a full form to create a new key across all locales:
+
+- **Key field** — dot-notation (e.g. `common.save`). Auto-suggested when opening from a plain-text chip.
+- **Per-locale inputs** — one input per detected locale, each labeled with a flag emoji.
+- **⚡ Translate** — auto-translates that locale from the source locale using the MyMemory API (no API key required).
+- **⚡ Translate All** — fills all non-source locales in parallel with one click.
+- **✓ Create Key** — writes the key to all locale JSON files simultaneously.
+
+Opening from a plain-text suggestion chip pre-fills the key name and source value automatically.
+
+> 📸 _Screenshot: Add i18n Key form in sidebar with locale inputs and translate buttons_ — proximamente
 
 ### CodeLens in locale JSON files
 
