@@ -154,6 +154,18 @@ function activate(context) {
         })
     );
 
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.sortLocaleFile', async ({ filePath }) => {
+            await sortLocaleFile(filePath);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.sortAllLocaleFiles', async () => {
+            await sortAllLocaleFiles();
+        })
+    );
+
     // ── Providers ─────────────────────────────────────────────────────────────
 
     const langs = [{ language: 'html' }, { language: 'typescript' }];
@@ -165,7 +177,8 @@ function activate(context) {
             providedCodeActionKinds: [vscode.CodeActionKind.QuickFix]
         }),
         vscode.languages.registerDefinitionProvider(langs, { provideDefinition }),
-        vscode.languages.registerHoverProvider({ language: 'json' }, { provideHover: provideLocaleJsonHover })
+        vscode.languages.registerHoverProvider({ language: 'json' }, { provideHover: provideLocaleJsonHover }),
+        vscode.languages.registerCodeLensProvider({ language: 'json' }, { provideCodeLenses: provideLocaleJsonCodeLenses })
     );
 }
 
@@ -178,7 +191,7 @@ function getConfig() {
     return {
         localesPath: cfg.get('localesPath', 'src/assets/i18n'),
         sourceLocale: cfg.get('sourceLocale', 'es'),
-        severity: cfg.get('severity', 'error'),
+        severity: cfg.get('severity', 'info'),
     };
 }
 
@@ -324,11 +337,15 @@ function extractI18nUsages(doc) {
         const inner = match[1] ?? match[2];
         const innerStart = match.index + match[0].indexOf(inner);
         if (match[1]) {
-            QUOTED_KEY_RE.lastIndex = 0;
+            // Inside a parenthesized expression like (cond ? 'key1' : 'key2') | translate
+            // Only extract strings that appear as ternary branches (after ? or :),
+            // not strings that are part of comparison conditions (=== 'value', !== 'value')
+            const ternaryBranchRe = /[?:]\s*['"]([a-zA-Z][a-zA-Z0-9_]*(?:[._][a-zA-Z0-9_]+)*)['"]/g;
             let km;
-            while ((km = QUOTED_KEY_RE.exec(inner)) !== null) {
+            while ((km = ternaryBranchRe.exec(inner)) !== null) {
+                // km[0] starts with ? or :, key starts after that + quote
                 const key = km[1];
-                const keyStart = innerStart + km.index + 1;
+                const keyStart = innerStart + km.index + km[0].indexOf(key);
                 if (!seen.has(keyStart)) {
                     seen.add(keyStart);
                     usages.push({ key, range: new vscode.Range(doc.positionAt(keyStart), doc.positionAt(keyStart + key.length)) });
@@ -857,6 +874,10 @@ function showI18nTable(context, filterDoc = null) {
             vscode.commands.executeCommand('i18nKV.openLocaleFile', { filePath: msg.filePath, key: msg.key });
         } else if (msg.type === 'createKey') {
             createKeyInAllLocales(msg.key);
+        } else if (msg.type === 'sortAll') {
+            sortAllLocaleFiles().then(() => {
+                if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+            });
         }
     }, undefined, context.subscriptions);
 
@@ -987,6 +1008,11 @@ function getTableHtml(_webview) {
     border: 1px solid var(--input-border, var(--border)); outline: none; font-size: 13px;
   }
   .toolbar label { display: flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .toolbar-btn {
+    padding: 3px 10px; border-radius: 3px; font-size: 12px; cursor: pointer;
+    background: var(--btn-bg); color: var(--btn-fg); border: none;
+  }
+  .toolbar-btn:hover { background: var(--btn-hover); }
   .badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 7px; font-size: 11px; }
   .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
   table { width: 100%; border-collapse: collapse; min-width: 400px; }
@@ -1046,6 +1072,7 @@ function getTableHtml(_webview) {
 <div class="toolbar">
   <input id="search" type="text" placeholder="Buscar key o valor..." autocomplete="off" />
   <label><input type="checkbox" id="onlyMissing" /> Solo faltantes</label>
+  <button class="toolbar-btn" id="sortAllBtn" title="Ordena todas las keys de todos los locale JSON alfabéticamente">⇅ Ordenar A→Z</button>
 </div>
 <div class="table-wrap">
   <table id="tbl">
@@ -1187,9 +1214,172 @@ function getTableHtml(_webview) {
 
   document.getElementById('search').addEventListener('input', renderRows);
   document.getElementById('onlyMissing').addEventListener('change', renderRows);
+  document.getElementById('sortAllBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'sortAll' });
+  });
 </script>
 </body>
 </html>`;
+}
+
+// ─── CodeLens para locale JSON ───────────────────────────────────────────────
+
+/**
+ * Provides two CodeLens actions on the first line of any locale JSON file:
+ *  1. "Ver tabla i18n"  — opens the key table
+ *  2. "Ordenar keys A→Z" — sorts all keys alphabetically (with confirmation)
+ * @param {vscode.TextDocument} doc
+ * @returns {vscode.CodeLens[]}
+ */
+function provideLocaleJsonCodeLenses(doc) {
+    if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return [];
+
+    const topLine = new vscode.Range(0, 0, 0, 0);
+    const filePath = doc.uri.fsPath;
+
+    const lensTable = new vscode.CodeLens(topLine, {
+        title: '$(table) Ver tabla i18n',
+        command: 'i18nKV.showTable',
+        tooltip: 'Abrir la tabla completa de keys × idiomas',
+    });
+
+    const lensSort = new vscode.CodeLens(topLine, {
+        title: '$(sort-precedence) Ordenar keys A→Z',
+        command: 'i18nKV.sortLocaleFile',
+        arguments: [{ filePath }],
+        tooltip: 'Ordena todas las keys de este archivo JSON alfabéticamente (recursivo)',
+    });
+
+    return [lensTable, lensSort];
+}
+
+// ─── Sort locale files ────────────────────────────────────────────────────────
+
+/**
+ * Recursively sorts all keys of a plain object alphabetically.
+ * @param {any} obj
+ * @returns {any}
+ */
+function sortObjectKeys(obj) {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+    return Object.keys(obj).sort().reduce((acc, key) => {
+        acc[key] = sortObjectKeys(obj[key]);
+        return acc;
+    }, {});
+}
+
+/**
+ * Collects all locale JSON file paths from the locales directory.
+ * @returns {string[]}
+ */
+function collectAllLocaleFilePaths() {
+    const files = [];
+    if (!localesAbsPath || !fs.existsSync(localesAbsPath)) return files;
+    const structure = localeStructure ?? detectLocaleStructure(localesAbsPath);
+    try {
+        if (structure === 'namespaced') {
+            const localeDirs = fs.readdirSync(localesAbsPath, { withFileTypes: true })
+                .filter(d => d.isDirectory()).map(d => d.name);
+            for (const locale of localeDirs) {
+                const localePath = path.join(localesAbsPath, locale);
+                const jsonFiles = fs.readdirSync(localePath).filter(f => f.endsWith('.json'));
+                for (const f of jsonFiles) files.push(path.join(localePath, f));
+            }
+        } else {
+            const jsonFiles = fs.readdirSync(localesAbsPath, { withFileTypes: true })
+                .filter(e => e.isFile() && e.name.endsWith('.json')).map(e => e.name);
+            for (const f of jsonFiles) files.push(path.join(localesAbsPath, f));
+        }
+    } catch (_) { }
+    return files;
+}
+
+/**
+ * Sorts a list of files in place, rewriting each one.
+ * @param {string[]} files
+ */
+function sortFiles(files) {
+    let errors = 0;
+    for (const filePath of files) {
+        try {
+            const json = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            fs.writeFileSync(filePath, JSON.stringify(sortObjectKeys(json), null, 2) + '\n', 'utf8');
+        } catch (e) {
+            errors++;
+            vscode.window.showErrorMessage(`i18nKV: Error en "${path.basename(filePath)}": ${e.message}`);
+        }
+    }
+    return errors;
+}
+
+/**
+ * Asks the user whether to sort just this file or all locale files, then sorts accordingly.
+ * @param {string} filePath
+ */
+async function sortLocaleFile(filePath) {
+    if (!filePath || !fs.existsSync(filePath)) {
+        vscode.window.showWarningMessage('i18nKV: Archivo no encontrado.');
+        return;
+    }
+
+    const fileName = path.basename(filePath);
+    const allFiles = collectAllLocaleFilePaths();
+    const allNames = allFiles.map(f => path.relative(localesAbsPath, f)).join(', ');
+
+    const choice = await vscode.window.showWarningMessage(
+        `Ordenar keys alfabéticamente (recursivo en todos los niveles).\n\n¿Qué archivos quieres ordenar?`,
+        { modal: true },
+        `Solo "${fileName}"`,
+        'Todos los locales'
+    );
+
+    if (!choice) return;
+
+    if (choice === `Solo "${fileName}"`) {
+        const errors = sortFiles([filePath]);
+        loadLocaleKeys();
+        if (errors === 0) vscode.window.showInformationMessage(`i18nKV: "${fileName}" ordenado ✓`);
+    } else {
+        if (allFiles.length === 0) {
+            vscode.window.showWarningMessage('i18nKV: No se encontraron archivos de locale.');
+            return;
+        }
+        const confirm = await vscode.window.showWarningMessage(
+            `Se reescribirán ${allFiles.length} archivos:\n${allNames}`,
+            { modal: true },
+            'Ordenar todos'
+        );
+        if (confirm !== 'Ordenar todos') return;
+        const errors = sortFiles(allFiles);
+        loadLocaleKeys();
+        if (errors === 0) vscode.window.showInformationMessage(`i18nKV: ${allFiles.length} archivos ordenados ✓`);
+    }
+}
+
+/**
+ * Sorts ALL locale JSON files alphabetically, with a single confirmation.
+ */
+async function sortAllLocaleFiles() {
+    const files = collectAllLocaleFilePaths();
+
+    if (files.length === 0) {
+        vscode.window.showWarningMessage('i18nKV: No se encontraron archivos de locale.');
+        return;
+    }
+
+    const fileNames = files.map(f => path.relative(localesAbsPath, f)).join(', ');
+    const confirm = await vscode.window.showWarningMessage(
+        `¿Ordenar keys alfabéticamente en TODOS los archivos de locale?\n\n${fileNames}`,
+        { modal: true },
+        'Ordenar todos'
+    );
+    if (confirm !== 'Ordenar todos') return;
+
+    const errors = sortFiles(files);
+    loadLocaleKeys();
+    if (errors === 0) {
+        vscode.window.showInformationMessage(`i18nKV: ${files.length} archivos ordenados ✓`);
+    }
 }
 
 // ─── Exports ──────────────────────────────────────────────────────────────────

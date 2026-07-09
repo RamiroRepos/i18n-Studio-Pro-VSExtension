@@ -1,1 +1,8 @@
-/node_modules
+node_modules/
+*.vsix
+EXTENSION-STANDARD.md
+generate-icon.js
+generate-profile-icon.js
+profile-icon.png
+img1.png
+img2.png

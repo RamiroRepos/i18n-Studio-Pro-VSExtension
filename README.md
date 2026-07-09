@@ -7,17 +7,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.0.4**
-
----
-
-## Screenshots
-
-![Hover with translations across all locales](https://i.imgur.com/tewZzRx.png)
-_Hover showing translations for ES, EN and FR with direct links to each locale file_
-
-![Missing key error with Quick Fix](https://i.imgur.com/SvGLN2x.png)
-_Missing key underlined in red with diagnostic message and Quick Fix available_
+**Version: 2.0.8**
 
 ---
 
@@ -25,61 +15,84 @@ _Missing key underlined in red with diagnostic message and Quick Fix available_
 
 ### Real-time Validation
 
-- Detects all i18n keys used in HTML templates and TypeScript files
-- Underlines in **red** any key that does not exist in the source locale
-- Automatically updates when locale JSON files are edited
+Detects all i18n keys used in HTML templates and TypeScript files. Underlines any key that does not exist in the source locale. Automatically updates when locale JSON files are edited.
+
+> 📸 _Screenshot: missing key underlined with diagnostic message_ — proximamente
 
 ### Inline Decorations
 
-- Shows the translation text in **gray italic** next to each key, directly in the editor
-- Always visible without hovering
-- Updates when switching tabs or modifying JSON files
+Shows the translation text in **gray italic** next to each key, directly in the editor. Always visible without hovering. Updates when switching tabs or modifying JSON files.
 
-### Ctrl+Click — Go to Source
+> 📸 _Screenshot: inline decoration showing translated value next to key_ — proximamente
 
-- `Ctrl+Click` on any i18n key opens the source locale JSON file at the exact line where the key is defined
+### Smart Hover — HTML & TypeScript
 
-### Smart Hover
+Hover over any i18n key to see its translations across all available locales. Fixed order: **ES first, EN second**, rest alphabetical. Each locale includes a link that opens the JSON file at the exact key line.
 
-- Hover over any i18n key to see its translations across all available locales
-- Fixed order: **ES first, EN second**, rest alphabetical
-- Each locale includes a `$(go-to-file)` link that opens the JSON file at the exact key line
-- ✅ Key found → shows the translated text per locale
-- ❌ Key missing → shows a missing key warning with Quick Fix available
+![Hover with translations across all locales](https://i.imgur.com/tewZzRx.png)
+_Hover showing translations for ES, EN and FR with direct links to each locale file_
 
-### Hover in locale JSON files
+### Hover in Locale JSON files
 
-- When editing a `.json` locale file, hover over any key to see its translations in **all other languages**
-- Each translation shows a direct link to open that locale file at the exact key line
-- Works for both flat and namespaced structures
+When editing a `.json` locale file, hover over any key to see its translations in **all other languages**. Each entry shows a direct link to open that locale at the exact key line. Works for both flat and namespaced structures.
 
-### i18n Key Table — full overview
-
-- Opens a **table panel** showing all keys as rows and each locale as a column
-- Filter by key name or translation value in real time
-- Toggle **Solo faltantes** to see only keys missing in at least one locale
-- Click `↗` on any cell to jump directly to that key in the locale JSON file
-- Table auto-refreshes when locale JSON files change
-
-### i18n Table for current file (toolbar button)
-
-- A **🌐 globe icon** appears in the editor toolbar when viewing an `.html` or `.ts` file
-- Clicking it opens the table **filtered to the keys used in that file only**
-- Below the table, a **💡 "Textos sin traducir"** section detects plain text in the HTML (tag content, `placeholder`, `title`, `aria-label` attributes) that has no `| translate` — each one shows a **+ crear key** button to create the i18n key immediately
-
-### Autocompletion (IntelliSense)
-
-- Suggests all available keys from the source locale when typing inside a `| translate` or `translate.instant()` context
-- Shows the translation as `detail` in the suggestion menu
-- Works in HTML templates and TypeScript files
+> 📸 _Screenshot: hover on JSON key showing translations in EN, FR_ — proximamente
 
 ### Quick Fix — Create key in all locales
 
-- When a key is marked in red, the VS Code 💡 lightbulb appears
-- The action `💡 Create key in all locales` writes the missing key to all locale JSON files simultaneously
-- Prompts for the source locale value; other locales get a `[LOCALE] value` placeholder
+When a key is marked as missing, the VS Code 💡 lightbulb appears. The action writes the missing key to **all locale JSON files simultaneously**. Prompts for the source locale value; other locales get a `[LOCALE] value` placeholder.
 
-### Detected Patterns
+![Missing key error with Quick Fix](https://i.imgur.com/SvGLN2x.png)
+_Missing key with Quick Fix available_
+
+### Ctrl+Click — Go to Source
+
+`Ctrl+Click` on any i18n key opens the source locale JSON file at the exact line where the key is defined.
+
+> 📸 _Screenshot: Ctrl+Click navigating to JSON file at key line_ — proximamente
+
+### Autocompletion (IntelliSense)
+
+Suggests all available keys from the source locale when typing inside a `| translate` or `translate.instant()` context. Shows the translation as detail in the suggestion menu. Works in HTML templates and TypeScript files.
+
+> 📸 _Screenshot: IntelliSense dropdown showing key suggestions with translations_ — proximamente
+
+### i18n Key Table — full overview
+
+Opens a **table panel** showing all keys as rows and each locale as a column. Features:
+
+- Filter by key name or translation value in real time
+- Toggle **Solo faltantes** to see only keys missing in at least one locale
+- Click `↗` on any cell to jump directly to that key in the locale JSON file
+- Button **⇅ Ordenar A→Z** to sort all locale files alphabetically (with confirmation)
+- Table auto-refreshes when locale JSON files change
+
+> 📸 _Screenshot: table panel with key rows, locale columns, missing cells highlighted_ — proximamente
+
+### i18n Table for current file — toolbar button
+
+A **🌐 globe icon** appears in the editor toolbar when viewing an `.html` or `.ts` file. Clicking it opens the table **filtered to the keys used in that file only**. Below the table, a **💡 Textos sin traducir** section detects plain text in the HTML (tag content, `placeholder`, `title`, `aria-label` attributes) that has no `| translate` — each shows a **+ crear key** button.
+
+> 📸 _Screenshot: globe button in editor toolbar, table filtered to file keys_ — proximamente
+
+> 📸 _Screenshot: "Textos sin traducir" section with plain text chips and "+ crear key" buttons_ — proximamente
+
+### CodeLens in locale JSON files
+
+On the first line of any locale JSON file, two CodeLens actions appear:
+
+- **`$(table) Ver tabla i18n`** — opens the full key table
+- **`$(sort-precedence) Ordenar keys A→Z`** — sorts keys alphabetically with a confirmation dialog
+
+The sort confirmation asks whether to sort **only this file** or **all locale files**. If all files are selected, a second modal lists every file that will be rewritten before proceeding.
+
+> 📸 _Screenshot: CodeLens actions on first line of locale JSON file_ — proximamente
+
+> 📸 _Screenshot: sort confirmation modal asking "Solo este archivo" vs "Todos los locales"_ — proximamente
+
+---
+
+## Detected Patterns
 
 | Pattern               | Example                                       |
 | --------------------- | --------------------------------------------- |
@@ -143,7 +156,7 @@ Add this to your project's `.vscode/settings.json`:
 {
   "i18nKV.localesPath": "src/assets/i18n",
   "i18nKV.sourceLocale": "es",
-  "i18nKV.severity": "error"
+  "i18nKV.severity": "info"
 }
 ```
 
@@ -151,7 +164,7 @@ Add this to your project's `.vscode/settings.json`:
 | --------------------- | ------------------------------------ | ------------------- | ------------------------------------------------------- |
 | `i18nKV.localesPath`  | string                               | `"src/assets/i18n"` | Path to the locales folder (relative to workspace root) |
 | `i18nKV.sourceLocale` | string                               | `"es"`              | Source locale used to validate keys                     |
-| `i18nKV.severity`     | `"error"` \| `"warning"` \| `"info"` | `"error"`           | Diagnostic severity for missing i18n keys               |
+| `i18nKV.severity`     | `"error"` \| `"warning"` \| `"info"` | `"info"`            | Diagnostic severity for missing i18n keys               |
 
 ---
 
@@ -164,6 +177,8 @@ Add this to your project's `.vscode/settings.json`:
 | `i18nKV: Create missing key in all locales` | Creates a missing key in all locale JSON files                   |
 | `i18nKV: Show i18n Key Table`               | Opens the full key table across all locales                      |
 | `i18nKV: Show i18n Table for this file`     | Opens the table filtered to the keys of the active file          |
+| `i18nKV: Sort locale file keys A→Z`         | Sorts keys of a locale file alphabetically (with confirmation)   |
+| `i18nKV: Sort ALL locale files keys A→Z`    | Sorts keys of all locale files alphabetically (with confirmation)|
 
 Access from the command palette: `Ctrl+Shift+P` → `i18nKV: ...`
 

@@ -3,7 +3,7 @@
   "displayName": "i18n Key Validator",
   "description": "Validates i18n translation keys in HTML/TS files against locale JSON files. Supports ngx-translate and similar i18n setups.",
   "publisher": "RamiroCR98",
-  "version": "2.0.4",
+  "version": "2.0.8",
   "license": "MIT",
   "icon": "icon.png",
   "engines": {
@@ -40,7 +40,7 @@
             "warning",
             "info"
           ],
-          "default": "error",
+          "default": "info",
           "description": "Diagnostic severity for missing i18n keys."
         }
       }
@@ -66,6 +66,14 @@
         "command": "i18nKV.showTableForFile",
         "title": "i18nKV: Show i18n Table for this file",
         "icon": "$(globe)"
+      },
+      {
+        "command": "i18nKV.sortLocaleFile",
+        "title": "i18nKV: Sort locale file keys A→Z"
+      },
+      {
+        "command": "i18nKV.sortAllLocaleFiles",
+        "title": "i18nKV: Sort ALL locale files keys A→Z"
       }
     ],
     "menus": {
