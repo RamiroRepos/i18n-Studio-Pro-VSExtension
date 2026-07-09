@@ -1,7 +1,7 @@
 {
-  "name": "i18n-key-validator",
-  "displayName": "i18n Key Validator",
-  "description": "Validates i18n translation keys in HTML/TS files against locale JSON files. Supports ngx-translate and similar i18n setups.",
+  "name": "i18n-studio-pro",
+  "displayName": "i18n Studio Pro",
+  "description": "Full-featured i18n management suite for VS Code. Real-time validation, inline translations, key table, hover across locales, CodeLens, sort keys, and plain-text detection. Supports ngx-translate and similar setups.",
   "publisher": "RamiroCR98",
   "version": "2.0.8",
   "license": "MIT",
@@ -10,7 +10,16 @@
     "vscode": "^1.74.0"
   },
   "categories": [
-    "Linters"
+    "Linters",
+    "Other"
+  ],
+  "keywords": [
+    "i18n",
+    "translate",
+    "ngx-translate",
+    "angular",
+    "localization",
+    "internationalization"
   ],
   "activationEvents": [
     "onStartupFinished",
@@ -21,12 +30,12 @@
   "main": "./extension.js",
   "contributes": {
     "configuration": {
-      "title": "ngx-translate i18n Validator",
+      "title": "i18n Studio Pro",
       "properties": {
         "i18nKV.localesPath": {
           "type": "string",
           "default": "src/assets/i18n",
-          "description": "Path to locale folder relative to workspace root. Must contain {locale}/{namespace}.json files."
+          "description": "Path to locale folder relative to workspace root."
         },
         "i18nKV.sourceLocale": {
           "type": "string",
@@ -48,32 +57,32 @@
     "commands": [
       {
         "command": "i18nKV.reload",
-        "title": "i18nKV: Reload locale files"
+        "title": "i18n Studio Pro: Reload locale files"
       },
       {
         "command": "i18nKV.openLocaleFile",
-        "title": "i18nKV: Open locale file"
+        "title": "i18n Studio Pro: Open locale file"
       },
       {
         "command": "i18nKV.createKey",
-        "title": "i18nKV: Create missing key in all locales"
+        "title": "i18n Studio Pro: Create missing key in all locales"
       },
       {
         "command": "i18nKV.showTable",
-        "title": "i18nKV: Show i18n Key Table"
+        "title": "i18n Studio Pro: Show i18n Key Table"
       },
       {
         "command": "i18nKV.showTableForFile",
-        "title": "i18nKV: Show i18n Table for this file",
+        "title": "i18n Studio Pro: Show i18n Table for this file",
         "icon": "$(globe)"
       },
       {
         "command": "i18nKV.sortLocaleFile",
-        "title": "i18nKV: Sort locale file keys A→Z"
+        "title": "i18n Studio Pro: Sort locale file keys A→Z"
       },
       {
         "command": "i18nKV.sortAllLocaleFiles",
-        "title": "i18nKV: Sort ALL locale files keys A→Z"
+        "title": "i18n Studio Pro: Sort ALL locale files keys A→Z"
       }
     ],
     "menus": {
@@ -85,5 +94,9 @@
         }
       ]
     }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension"
   }
 }

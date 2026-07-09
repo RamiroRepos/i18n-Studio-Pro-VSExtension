@@ -1,6 +1,6 @@
-# i18n Key Validator
+# i18n Studio Pro
 
-A VS Code extension that validates i18n translation keys in real time across HTML and TypeScript files, comparing them against your locale JSON files.
+A full-featured i18n management suite for VS Code. Real-time validation, inline translations, key table, hover across locales, CodeLens, sort keys, and plain-text detection. Supports ngx-translate and similar setups.
 
 Supports two file structures:
 
@@ -172,15 +172,15 @@ Add this to your project's `.vscode/settings.json`:
 
 | Command                                     | Description                                                      |
 | ------------------------------------------- | ---------------------------------------------------------------- |
-| `i18nKV: Reload locale files`               | Manually reloads all locale JSON files                           |
-| `i18nKV: Open locale file`                  | Opens the locale JSON file at the exact key line (used by hover) |
-| `i18nKV: Create missing key in all locales` | Creates a missing key in all locale JSON files                   |
-| `i18nKV: Show i18n Key Table`               | Opens the full key table across all locales                      |
-| `i18nKV: Show i18n Table for this file`     | Opens the table filtered to the keys of the active file          |
-| `i18nKV: Sort locale file keys A→Z`         | Sorts keys of a locale file alphabetically (with confirmation)   |
-| `i18nKV: Sort ALL locale files keys A→Z`    | Sorts keys of all locale files alphabetically (with confirmation)|
+| `i18n Studio Pro: Reload locale files`               | Manually reloads all locale JSON files                           |
+| `i18n Studio Pro: Open locale file`                  | Opens the locale JSON file at the exact key line (used by hover) |
+| `i18n Studio Pro: Create missing key in all locales` | Creates a missing key in all locale JSON files                   |
+| `i18n Studio Pro: Show i18n Key Table`               | Opens the full key table across all locales                      |
+| `i18n Studio Pro: Show i18n Table for this file`     | Opens the table filtered to the keys of the active file          |
+| `i18n Studio Pro: Sort locale file keys A→Z`         | Sorts keys of a locale file alphabetically (with confirmation)   |
+| `i18n Studio Pro: Sort ALL locale files keys A→Z`    | Sorts keys of all locale files alphabetically (with confirmation)|
 
-Access from the command palette: `Ctrl+Shift+P` → `i18nKV: ...`
+Access from the command palette: `Ctrl+Shift+P` → `i18n Studio Pro: ...`
 
 The **🌐 button** in the editor toolbar (visible on `.html` and `.ts` files) is a shortcut to `Show i18n Table for this file`.
 
