@@ -28,6 +28,8 @@ let inlineDecorationType;
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
+    outputChannel = vscode.window.createOutputChannel('i18n Studio Pro');
+    context.subscriptions.push(outputChannel);
     diagnosticCollection = vscode.languages.createDiagnosticCollection('ngx-i18n');
     context.subscriptions.push(diagnosticCollection);
 
@@ -222,6 +224,12 @@ let sidebarView;
 
 /** @type {boolean} */
 let scanCancelled = false;
+
+/** @type {vscode.OutputChannel} */
+let outputChannel;
+
+/** @type {string[]} last scan log lines, kept for issue reports */
+let lastScanLog = [];
 
 function flattenKeys(obj, prefix, result) {
     for (const key of Object.keys(obj)) {
@@ -719,6 +727,77 @@ async function createKeyInAllLocales(key) {
     vscode.window.showInformationMessage(
         `i18nKV: Key "${key}" creado en ${createdIn.join(', ')} ✓`
     );
+}
+
+/**
+ * Create a key in all locales using provided translations map.
+ * @param {string} key  dot-notation key e.g. "company.tabs.newKey"
+ * @param {Record<string, string>} translations  locale → value map
+ */
+async function createKeyWithTranslations(key, translations) {
+    const root = getWorkspaceRoot();
+    if (!root) return;
+
+    const { localesPath } = getConfig();
+    const localesRoot = path.join(root, localesPath);
+    const segments = key.split('.');
+    const structure = localeStructure ?? detectLocaleStructure(localesRoot);
+    const createdIn = [];
+
+    if (structure === 'namespaced') {
+        const namespace = segments[0];
+        let localeDirs = [];
+        try {
+            localeDirs = fs.readdirSync(localesRoot, { withFileTypes: true })
+                .filter(d => d.isDirectory()).map(d => d.name);
+        } catch (_) { }
+
+        for (const locale of localeDirs) {
+            const targetFile = path.join(localesRoot, locale, `${namespace}.json`);
+            let json = {};
+            if (fs.existsSync(targetFile)) {
+                try { json = JSON.parse(fs.readFileSync(targetFile, 'utf8')); } catch (_) { json = {}; }
+            }
+            const value = translations[locale] ?? translations[Object.keys(translations)[0]] ?? '';
+            setNestedKey(json, segments, value);
+            try {
+                fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
+                createdIn.push(locale);
+            } catch (e) {
+                vscode.window.showErrorMessage(`i18n Studio Pro: Error writing ${targetFile}: ${e.message}`);
+            }
+        }
+    } else {
+        let localeFiles = [];
+        try {
+            localeFiles = fs.readdirSync(localesRoot, { withFileTypes: true })
+                .filter(e => e.isFile() && e.name.endsWith('.json')).map(e => e.name);
+        } catch (_) { }
+
+        for (const file of localeFiles) {
+            const locale = path.basename(file, '.json');
+            const targetFile = path.join(localesRoot, file);
+            let json = {};
+            if (fs.existsSync(targetFile)) {
+                try { json = JSON.parse(fs.readFileSync(targetFile, 'utf8')); } catch (_) { json = {}; }
+            }
+            const value = translations[locale] ?? translations[Object.keys(translations)[0]] ?? '';
+            setNestedKey(json, segments, value);
+            try {
+                fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
+                createdIn.push(locale);
+            } catch (e) {
+                vscode.window.showErrorMessage(`i18n Studio Pro: Error writing ${targetFile}: ${e.message}`);
+            }
+        }
+    }
+
+    loadLocaleKeys();
+    revalidateAll();
+    refreshAllDecorations();
+
+    sidebarView?.webview.postMessage({ type: 'keyCreated', key });
+    vscode.window.showInformationMessage(`i18n Studio Pro: Key "${key}" created in ${createdIn.join(', ')} ✓`);
 }
 
 /**
@@ -1414,22 +1493,42 @@ async function saveWorkspaceSetting(key, value) {
 async function runProjectScan() {
     if (!sidebarView) return;
     scanCancelled = false;
+    lastScanLog = [];
 
-    const uris = await vscode.workspace.findFiles(
-        '**/*.{html,ts}',
-        '{**/node_modules/**,**/.git/**,**/dist/**,**/*.spec.ts}'
-    );
+    const startTime = Date.now();
+    const log = (msg) => {
+        const line = `[${new Date().toISOString()}] ${msg}`;
+        lastScanLog.push(line);
+        outputChannel.appendLine(line);
+    };
+
+    log('Scan started');
+
+    let uris;
+    try {
+        uris = await vscode.workspace.findFiles(
+            '**/*.{html,ts}',
+            '{**/node_modules/**,**/.git/**,**/dist/**,**/*.spec.ts}'
+        );
+    } catch (e) {
+        log(`findFiles error: ${e.message}`);
+        throw e;
+    }
 
     const total = uris.length;
+    log(`Found ${total} files to scan`);
     sidebarView.webview.postMessage({ type: 'scanProgress', done: 0, total });
 
     const sourceKeys = getSourceKeys();
     const missingKeys = [];
     const plainTextByFile = {};
-    const BATCH = 20;
+    const BATCH = 5;
 
     for (let i = 0; i < uris.length; i += BATCH) {
-        if (scanCancelled) break;
+        if (scanCancelled) {
+            log('Scan cancelled by user');
+            break;
+        }
         const batch = uris.slice(i, i + BATCH);
         for (const uri of batch) {
             if (scanCancelled) break;
@@ -1449,13 +1548,18 @@ async function runProjectScan() {
                 if (suggestions.length > 0) {
                     plainTextByFile[vscode.workspace.asRelativePath(uri)] = suggestions;
                 }
-            } catch (_) { }
+            } catch (e) {
+                log(`Error processing ${vscode.workspace.asRelativePath(uri)}: ${e.message}`);
+            }
+            // yield to event loop after every file to keep VS Code responsive
+            await new Promise(r => setTimeout(r, 5));
         }
         sidebarView.webview.postMessage({ type: 'scanProgress', done: Math.min(i + BATCH, total), total });
-        await new Promise(r => setTimeout(r, 0));
     }
 
     if (!scanCancelled) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        log(`Scan complete: ${total} files, ${missingKeys.length} missing keys, ${Object.keys(plainTextByFile).length} files with plain text suggestions (${elapsed}s)`);
         sidebarView.webview.postMessage({ type: 'scanResult', missingKeys, plainTextByFile });
     }
 }
@@ -1476,6 +1580,21 @@ function handleSidebarMessage(msg) {
         case 'cancelScan':
             scanCancelled = true;
             break;
+        case 'openAddKeyForm': {
+            // msg.text = suggested plain text, open the add-key form in sidebar
+            const cfg = getConfig();
+            const locs = sortedLocales();
+            sidebarView?.webview.postMessage({
+                type: 'openAddKeyForm',
+                text: msg.text,
+                sourceLocale: cfg.sourceLocale,
+                locales: locs,
+            });
+            break;
+        }
+        case 'createKeyWithTranslations':
+            createKeyWithTranslations(msg.key, msg.translations);
+            break;
         case 'createKey':
             createKeyInAllLocales(msg.key);
             break;
@@ -1491,7 +1610,8 @@ function handleSidebarMessage(msg) {
             const file = editor ? vscode.workspace.asRelativePath(editor.document.uri) : '';
             const line = editor ? (editor.selection.start.line + 1) : 0;
             const snippet = editor ? editor.document.lineAt(editor.selection.start.line).text.trim() : '';
-            sidebarView?.webview.postMessage({ type: 'editorContext', selectedText, file, line, snippet });
+            const scanLogs = lastScanLog.slice(-30).join('\n'); // last 30 log lines
+            sidebarView?.webview.postMessage({ type: 'editorContext', selectedText, file, line, snippet, scanLogs });
             break;
         }
     }
@@ -1606,6 +1726,18 @@ function getSidebarHtml() {
 
   .code-block { background: var(--input-bg); border-radius: 3px; padding: 6px 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; word-break: break-all; white-space: pre-wrap; }
 
+  /* Add i18n Key form */
+  .locale-row { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+  .locale-row label { font-size: 11px; font-weight: 600; opacity: .75; display: flex; align-items: center; gap: 6px; }
+  .locale-flag { font-size: 13px; }
+  .locale-input-wrap { display: flex; gap: 4px; }
+  .locale-input-wrap input { flex: 1; }
+  .translate-btn { white-space: nowrap; font-size: 10px; padding: 2px 7px; width: auto; display: flex; align-items: center; gap: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .translate-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .translate-btn.loading { opacity: .6; pointer-events: none; }
+  .source-locale-row label { color: var(--vscode-terminal-ansiCyan); }
+  .source-locale-row label::after { content: ' (source)'; font-size: 10px; opacity: .6; }
+
   .flash { font-size: 11px; color: var(--success); animation: fadeout 2s forwards; }
   @keyframes fadeout { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
 
@@ -1665,6 +1797,7 @@ function getSidebarHtml() {
     <div style="display:flex;gap:6px">
       <button id="scanBtn">Scan project</button>
       <button class="secondary small" id="cancelScanBtn" style="display:none">Cancel</button>
+      <button class="secondary small" id="clearScanBtn" style="display:none" title="Clear results">✕ Clear</button>
     </div>
     <div class="progress-wrap" id="progressWrap">
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
@@ -1681,6 +1814,26 @@ function getSidebarHtml() {
         <div id="plainList" style="margin-top:6px"></div>
       </details>
     </div>
+  </div>
+</div>
+
+<!-- ── Section 2b: Add i18n Key ── -->
+<div class="section" id="s-addkey">
+  <div class="section-header" onclick="toggleSection('s-addkey')">
+    ✚ Add i18n Key <span class="chevron">▾</span>
+  </div>
+  <div class="section-body hidden" id="s-addkey-body">
+    <div>
+      <label>Key <span style="font-size:10px;opacity:.6">(dot notation, e.g. common.save)</span></label>
+      <input type="text" id="addKeyName" placeholder="common.save" />
+    </div>
+    <div id="addKeyLocalesWrap"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+      <button id="addKeyTranslateAllBtn" class="secondary small">⚡ Translate All</button>
+      <button id="addKeyCreateBtn">✓ Create Key</button>
+      <button class="secondary small" id="addKeyCancelBtn">Cancel</button>
+    </div>
+    <div id="addKeyFeedback" style="display:none;margin-top:6px;font-size:11px;color:var(--vscode-terminal-ansiGreen)"></div>
   </div>
 </div>
 
@@ -1708,6 +1861,10 @@ function getSidebarHtml() {
       <label>Context (auto-filled)</label>
       <div class="code-block" id="contextBlock"></div>
     </div>
+    <div id="logsWrap" style="display:none">
+      <label>Scan Logs (auto-filled)</label>
+      <div class="code-block" id="logsBlock" style="max-height:120px;overflow-y:auto;font-size:10px"></div>
+    </div>
     <button id="submitReportBtn">Open GitHub Issue ↗</button>
   </div>
 </div>
@@ -1725,17 +1882,31 @@ function getSidebarHtml() {
     body.classList.toggle('hidden', collapsedSections[id]);
     chevron.textContent = collapsedSections[id] ? '▸' : '▾';
   }
+  function openSection(id) {
+    const body = document.getElementById(id + '-body');
+    const chevron = document.querySelector('#' + id + ' .chevron');
+    collapsedSections[id] = false;
+    body.classList.remove('hidden');
+    if (chevron) chevron.textContent = '▾';
+  }
   window.toggleSection = toggleSection;
 
   // ── Message bus ──────────────────────────────────────────────────────────
   window.addEventListener('message', e => {
     const msg = e.data;
-    if (msg.type === 'state')        applyState(msg);
-    if (msg.type === 'scanProgress') applyProgress(msg);
-    if (msg.type === 'scanResult')   applyResult(msg);
-    if (msg.type === 'scanError')    { resetScanUI(); alert('Scan error: ' + msg.message); }
-    if (msg.type === 'settingsSaved') flashSaved();
-    if (msg.type === 'editorContext') applyContext(msg);
+    if (msg.type === 'state')          applyState(msg);
+    if (msg.type === 'scanProgress')   applyProgress(msg);
+    if (msg.type === 'scanResult')     { applyResult(msg); document.getElementById('clearScanBtn').style.display = 'inline-flex'; }
+    if (msg.type === 'scanError')      { resetScanUI(); alert('Scan error: ' + msg.message); }
+    if (msg.type === 'settingsSaved')  flashSaved();
+    if (msg.type === 'editorContext')  applyContext(msg);
+    if (msg.type === 'openAddKeyForm') { buildAddKeyForm(msg); openSection('s-addkey'); document.getElementById('s-addkey').scrollIntoView({ behavior: 'smooth' }); }
+    if (msg.type === 'keyCreated')     {
+      const fb = document.getElementById('addKeyFeedback');
+      fb.textContent = '✓ Key "' + escHtml(msg.key) + '" created!';
+      fb.style.display = 'block';
+      setTimeout(() => { fb.style.display = 'none'; }, 3000);
+    }
   });
 
   document.addEventListener('DOMContentLoaded', () => vscode.postMessage({ type: 'ready' }));
@@ -1843,7 +2014,12 @@ function getSidebarHtml() {
         label.title = text;
         const btn = document.createElement('button');
         btn.textContent = '+ key';
-        btn.addEventListener('click', () => vscode.postMessage({ type: 'createKey', key: text }));
+        btn.addEventListener('click', () => {
+          vscode.postMessage({ type: 'openAddKeyForm', text });
+          // scroll to add-key section
+          document.getElementById('s-addkey').scrollIntoView({ behavior: 'smooth' });
+          openSection('s-addkey');
+        });
         chip.appendChild(label);
         chip.appendChild(btn);
         chips.appendChild(chip);
@@ -1855,11 +2031,141 @@ function getSidebarHtml() {
 
   document.getElementById('scanBtn').addEventListener('click', () => {
     document.getElementById('scanResults').style.display = 'none';
+    document.getElementById('clearScanBtn').style.display = 'none';
     vscode.postMessage({ type: 'scan' });
   });
   document.getElementById('cancelScanBtn').addEventListener('click', () => {
     vscode.postMessage({ type: 'cancelScan' });
     resetScanUI();
+  });
+  document.getElementById('clearScanBtn').addEventListener('click', () => {
+    document.getElementById('scanResults').style.display = 'none';
+    document.getElementById('clearScanBtn').style.display = 'none';
+    document.getElementById('progressWrap').style.display = 'none';
+  });
+
+  // ── Section 2b: Add i18n Key ─────────────────────────────────────────────
+  let _addKeyLocales = [];
+  let _addKeySource = '';
+
+  function buildAddKeyForm({ text, sourceLocale, locales }) {
+    _addKeyLocales = locales;
+    _addKeySource = sourceLocale;
+
+    // Auto-suggest key name from text: lowercase, replace spaces with dots
+    const suggested = text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .trim()
+      .replace(/\\s+/g, '.')
+      .slice(0, 40);
+    document.getElementById('addKeyName').value = suggested;
+
+    const wrap = document.getElementById('addKeyLocalesWrap');
+    wrap.innerHTML = '';
+
+    for (const locale of locales) {
+      const isSource = locale === sourceLocale;
+      const row = document.createElement('div');
+      row.className = 'locale-row' + (isSource ? ' source-locale-row' : '');
+
+      const lbl = document.createElement('label');
+      lbl.innerHTML = '<span class="locale-flag">' + getLocaleFlag(locale) + '</span> ' + escHtml(locale.toUpperCase());
+      row.appendChild(lbl);
+
+      const inputWrap = document.createElement('div');
+      inputWrap.className = 'locale-input-wrap';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.id = 'addkey-locale-' + locale;
+      input.placeholder = isSource ? text : 'Translation...';
+      if (isSource) input.value = text;
+      inputWrap.appendChild(input);
+
+      if (!isSource) {
+        const btn = document.createElement('button');
+        btn.className = 'translate-btn';
+        btn.innerHTML = '⚡ Translate';
+        btn.title = 'Auto-translate from ' + sourceLocale;
+        btn.addEventListener('click', async () => {
+          const srcVal = document.getElementById('addkey-locale-' + sourceLocale)?.value.trim();
+          if (!srcVal) { input.placeholder = 'Fill source locale first'; return; }
+          btn.classList.add('loading');
+          btn.innerHTML = '⏳ ...';
+          try {
+            const translated = await translateText(srcVal, sourceLocale, locale);
+            input.value = translated;
+          } catch (e) {
+            input.placeholder = 'Translation failed';
+          } finally {
+            btn.classList.remove('loading');
+            btn.innerHTML = '⚡ Translate';
+          }
+        });
+        inputWrap.appendChild(btn);
+      }
+
+      row.appendChild(inputWrap);
+      wrap.appendChild(row);
+    }
+    document.getElementById('addKeyFeedback').style.display = 'none';
+  }
+
+  async function translateText(text, fromLang, toLang) {
+    // Normalize lang codes: 'es' stays 'es', 'pt' → 'pt', 'zh-CN' etc.
+    const normFrom = fromLang.split('-')[0];
+    const normTo = toLang.split('-')[0];
+    const url = 'https://api.mymemory.translated.net/get?q='
+      + encodeURIComponent(text)
+      + '&langpair=' + normFrom + '|' + normTo;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (data.responseStatus !== 200) throw new Error(data.responseDetails);
+    return data.responseData.translatedText;
+  }
+
+  function getLocaleFlag(locale) {
+    const map = { en: '🇺🇸', es: '🇪🇸', fr: '🇫🇷', de: '🇩🇪', pt: '🇧🇷', it: '🇮🇹', nl: '🇳🇱', ja: '🇯🇵', zh: '🇨🇳', ko: '🇰🇷', ru: '🇷🇺', ar: '🇸🇦', pl: '🇵🇱', tr: '🇹🇷', sv: '🇸🇪', da: '🇩🇰', fi: '🇫🇮', nb: '🇳🇴', uk: '🇺🇦', cs: '🇨🇿', hu: '🇭🇺', ro: '🇷🇴' };
+    return map[locale.split('-')[0]] || '🌐';
+  }
+
+  document.getElementById('addKeyTranslateAllBtn').addEventListener('click', async () => {
+    const srcVal = document.getElementById('addkey-locale-' + _addKeySource)?.value.trim();
+    if (!srcVal) {
+      document.getElementById('addkey-locale-' + _addKeySource)?.focus();
+      return;
+    }
+    const btn = document.getElementById('addKeyTranslateAllBtn');
+    btn.classList.add('loading');
+    btn.textContent = '⏳ Translating...';
+    const nonSource = _addKeyLocales.filter(l => l !== _addKeySource);
+    await Promise.allSettled(nonSource.map(async locale => {
+      const input = document.getElementById('addkey-locale-' + locale);
+      if (!input) return;
+      try {
+        input.value = await translateText(srcVal, _addKeySource, locale);
+      } catch (_) {
+        input.placeholder = 'Translation failed';
+      }
+    }));
+    btn.classList.remove('loading');
+    btn.innerHTML = '⚡ Translate All';
+  });
+
+  document.getElementById('addKeyCreateBtn').addEventListener('click', () => {
+    const key = document.getElementById('addKeyName').value.trim();
+    if (!key) { document.getElementById('addKeyName').focus(); return; }
+    const translations = {};
+    for (const locale of _addKeyLocales) {
+      translations[locale] = document.getElementById('addkey-locale-' + locale)?.value.trim() || '';
+    }
+    vscode.postMessage({ type: 'createKeyWithTranslations', key, translations });
+  });
+
+  document.getElementById('addKeyCancelBtn').addEventListener('click', () => {
+    toggleSection('s-addkey');
   });
 
   // ── Section 3: Report Issue ──────────────────────────────────────────────
@@ -1867,7 +2173,9 @@ function getSidebarHtml() {
     vscode.postMessage({ type: 'getEditorContext' });
   });
 
-  function applyContext({ selectedText, file, line, snippet }) {
+  let _scanLogs = '';
+
+  function applyContext({ selectedText, file, line, snippet, scanLogs }) {
     const parts = [];
     if (file) parts.push('File: ' + file + (line ? ':' + line : ''));
     if (snippet) parts.push('Line: ' + snippet);
@@ -1875,6 +2183,14 @@ function getSidebarHtml() {
     const ctx = parts.join('\\n');
     document.getElementById('contextBlock').textContent = ctx;
     document.getElementById('contextWrap').style.display = 'block';
+    _scanLogs = scanLogs || '';
+    if (_scanLogs) {
+      const logsWrap = document.getElementById('logsWrap');
+      if (logsWrap) {
+        document.getElementById('logsBlock').textContent = _scanLogs;
+        logsWrap.style.display = 'block';
+      }
+    }
   }
 
   document.getElementById('submitReportBtn').addEventListener('click', () => {
@@ -1883,7 +2199,9 @@ function getSidebarHtml() {
     const ctx = document.getElementById('contextBlock').textContent;
     const labelMap = { 'false-positive': 'false-positive', 'bug': 'bug', 'feature': 'enhancement', 'structure': 'structure-support' };
     const titleMap = { 'false-positive': '[False Positive] ', 'bug': '[Bug] ', 'feature': '[Feature] ', 'structure': '[Structure] ' };
-    const body = desc + (ctx ? '\\n\\n**Context:**\\n\`\`\`\\n' + ctx + '\\n\`\`\`' : '');
+    let body = desc;
+    if (ctx) body += '\\n\\n**Context:**\\n\`\`\`\\n' + ctx + '\\n\`\`\`';
+    if (_scanLogs) body += '\\n\\n**Scan Logs:**\\n\`\`\`\\n' + _scanLogs + '\\n\`\`\`';
     const url = 'https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new'
       + '?labels=' + encodeURIComponent(labelMap[type])
       + '&title=' + encodeURIComponent(titleMap[type])

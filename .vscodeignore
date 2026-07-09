@@ -8,3 +8,5 @@ img2.png
 profile-icon.png
 package-lock.json
 .vscodeignore
+_deprecated-i18n-key-validator/**
+example/**
