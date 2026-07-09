@@ -7,7 +7,30 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.0.8**
+**Version: 2.0.9**
+
+---
+
+## Feature Overview
+
+| Feature | Where | Description |
+|---|---|---|
+| **Real-time Validation** | HTML / TS | Underlines keys not found in the source locale |
+| **Inline Decorations** | HTML / TS | Shows the translated value in gray italic next to each key |
+| **Smart Hover** | HTML / TS | Hover a key to see all locale translations with links to each file |
+| **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language |
+| **Ctrl+Click** | HTML / TS | Jump to the source locale JSON at the exact key line |
+| **IntelliSense** | HTML / TS | Autocompletes i18n keys inside `\| translate` and `translate.instant()` |
+| **Quick Fix** | HTML / TS | 💡 Creates a missing key in all locale files simultaneously |
+| **i18n Key Table** | Panel | Full key × locale table with search, missing filter and ↗ file links |
+| **Table for file** | Toolbar 🌐 | Opens the table filtered to the keys used in the active file |
+| **Plain text detection** | Table / Sidebar | Detects untranslated plain text in HTML and suggests creating keys |
+| **CodeLens in JSON** | Locale JSON | First-line actions: open table and sort keys A→Z |
+| **Sort keys A→Z** | JSON / Table | Sorts keys alphabetically and recursively — one file or all locales |
+| **Sidebar panel** | Activity Bar | Configuration UI, full project scan, and GitHub issue reporter |
+| **Project Scan** | Sidebar | Scans all HTML/TS files, lists missing keys and untranslated text |
+| **Config UI** | Sidebar | Edit `localesPath`, `sourceLocale`, `severity` without touching JSON |
+| **Report Issue** | Sidebar | Opens a pre-filled GitHub issue with editor context attached |
 
 ---
 
