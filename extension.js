@@ -1552,7 +1552,7 @@ async function runProjectScan() {
                 log(`Error processing ${vscode.workspace.asRelativePath(uri)}: ${e.message}`);
             }
             // yield to event loop after every file to keep VS Code responsive
-            await new Promise(r => setTimeout(r, 5));
+            await new Promise(r => setTimeout(r, 15));
         }
         sidebarView.webview.postMessage({ type: 'scanProgress', done: Math.min(i + BATCH, total), total });
     }
