@@ -69,6 +69,7 @@ function activate(context) {
         if (!isLocaleFile(uri)) return;
         loadLocaleKeys(); revalidateAll(); refreshAllDecorations();
         if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+        sendSidebarState();
     };
     watcher.onDidChange(onLocaleChange);
     watcher.onDidCreate(onLocaleChange);
@@ -100,7 +101,7 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('i18nKV')) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); }
+            if (e.affectsConfiguration('i18nKV')) { loadLocaleKeys(); revalidateAll(); refreshAllDecorations(); sendSidebarState(); }
         })
     );
 
@@ -178,7 +179,10 @@ function activate(context) {
         }),
         vscode.languages.registerDefinitionProvider(langs, { provideDefinition }),
         vscode.languages.registerHoverProvider({ language: 'json' }, { provideHover: provideLocaleJsonHover }),
-        vscode.languages.registerCodeLensProvider({ language: 'json' }, { provideCodeLenses: provideLocaleJsonCodeLenses })
+        vscode.languages.registerCodeLensProvider({ language: 'json' }, { provideCodeLenses: provideLocaleJsonCodeLenses }),
+        vscode.window.registerWebviewViewProvider('i18nStudioPro.sidebar', sidebarViewProvider, {
+            webviewOptions: { retainContextWhenHidden: true }
+        })
     );
 }
 
@@ -212,6 +216,12 @@ function isLocaleFile(uri) {
  * @type {'flat' | 'namespaced' | null}
  */
 let localeStructure = null;
+
+/** @type {vscode.WebviewView | undefined} */
+let sidebarView;
+
+/** @type {boolean} */
+let scanCancelled = false;
 
 function flattenKeys(obj, prefix, result) {
     for (const key of Object.keys(obj)) {
@@ -1380,6 +1390,514 @@ async function sortAllLocaleFiles() {
     if (errors === 0) {
         vscode.window.showInformationMessage(`i18nKV: ${files.length} archivos ordenados ✓`);
     }
+}
+
+// ─── Sidebar WebviewView ──────────────────────────────────────────────────────
+
+function sendSidebarState() {
+    if (!sidebarView) return;
+    const cfg = getConfig();
+    const locales = Object.keys(allLocaleKeys);
+    const keyCount = Object.keys(getSourceKeys()).length;
+    sidebarView.webview.postMessage({ type: 'state', config: cfg, localeStructure, locales, keyCount });
+}
+
+async function saveWorkspaceSetting(key, value) {
+    try {
+        await vscode.workspace.getConfiguration('i18nKV').update(key, value, vscode.ConfigurationTarget.Workspace);
+        sidebarView?.webview.postMessage({ type: 'settingsSaved' });
+    } catch (e) {
+        sidebarView?.webview.postMessage({ type: 'settingsError', message: e.message });
+    }
+}
+
+async function runProjectScan() {
+    if (!sidebarView) return;
+    scanCancelled = false;
+
+    const uris = await vscode.workspace.findFiles(
+        '**/*.{html,ts}',
+        '{**/node_modules/**,**/.git/**,**/dist/**,**/*.spec.ts}'
+    );
+
+    const total = uris.length;
+    sidebarView.webview.postMessage({ type: 'scanProgress', done: 0, total });
+
+    const sourceKeys = getSourceKeys();
+    const missingKeys = [];
+    const plainTextByFile = {};
+    const BATCH = 20;
+
+    for (let i = 0; i < uris.length; i += BATCH) {
+        if (scanCancelled) break;
+        const batch = uris.slice(i, i + BATCH);
+        for (const uri of batch) {
+            if (scanCancelled) break;
+            try {
+                const doc = await vscode.workspace.openTextDocument(uri);
+                for (const { key, range } of extractI18nUsages(doc)) {
+                    if (!(key in sourceKeys)) {
+                        missingKeys.push({
+                            key,
+                            file: vscode.workspace.asRelativePath(uri),
+                            line: range.start.line + 1,
+                            filePath: uri.fsPath,
+                        });
+                    }
+                }
+                const suggestions = extractPlainTextSuggestions(doc);
+                if (suggestions.length > 0) {
+                    plainTextByFile[vscode.workspace.asRelativePath(uri)] = suggestions;
+                }
+            } catch (_) { }
+        }
+        sidebarView.webview.postMessage({ type: 'scanProgress', done: Math.min(i + BATCH, total), total });
+        await new Promise(r => setTimeout(r, 0));
+    }
+
+    if (!scanCancelled) {
+        sidebarView.webview.postMessage({ type: 'scanResult', missingKeys, plainTextByFile });
+    }
+}
+
+function handleSidebarMessage(msg) {
+    switch (msg.type) {
+        case 'ready':
+            sendSidebarState();
+            break;
+        case 'saveSetting':
+            saveWorkspaceSetting(msg.key, msg.value);
+            break;
+        case 'scan':
+            runProjectScan().catch(e => {
+                sidebarView?.webview.postMessage({ type: 'scanError', message: e.message });
+            });
+            break;
+        case 'cancelScan':
+            scanCancelled = true;
+            break;
+        case 'createKey':
+            createKeyInAllLocales(msg.key);
+            break;
+        case 'openFile':
+            vscode.commands.executeCommand('i18nKV.openLocaleFile', { filePath: msg.filePath, key: msg.key });
+            break;
+        case 'openGithubIssue':
+            vscode.env.openExternal(vscode.Uri.parse(msg.url));
+            break;
+        case 'getEditorContext': {
+            const editor = vscode.window.activeTextEditor;
+            const selectedText = editor?.document.getText(editor.selection) ?? '';
+            const file = editor ? vscode.workspace.asRelativePath(editor.document.uri) : '';
+            const line = editor ? (editor.selection.start.line + 1) : 0;
+            const snippet = editor ? editor.document.lineAt(editor.selection.start.line).text.trim() : '';
+            sidebarView?.webview.postMessage({ type: 'editorContext', selectedText, file, line, snippet });
+            break;
+        }
+    }
+}
+
+const sidebarViewProvider = {
+    resolveWebviewView(webviewView) {
+        sidebarView = webviewView;
+        webviewView.webview.options = { enableScripts: true };
+        webviewView.webview.html = getSidebarHtml();
+        setTimeout(() => sendSidebarState(), 300);
+        webviewView.webview.onDidReceiveMessage(handleSidebarMessage);
+        webviewView.onDidChangeVisibility(() => { if (webviewView.visible) sendSidebarState(); });
+        webviewView.onDidDispose(() => { sidebarView = undefined; });
+    }
+};
+
+function getSidebarHtml() {
+    return /* html */`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>i18n Studio Pro</title>
+<style>
+  :root {
+    --bg: var(--vscode-sideBar-background);
+    --fg: var(--vscode-sideBar-foreground, var(--vscode-editor-foreground));
+    --border: var(--vscode-sideBarSectionHeader-border, var(--vscode-panel-border, #3334));
+    --header-bg: var(--vscode-sideBarSectionHeader-background);
+    --btn-bg: var(--vscode-button-background);
+    --btn-fg: var(--vscode-button-foreground);
+    --btn-hover: var(--vscode-button-hoverBackground);
+    --btn2-bg: var(--vscode-button-secondaryBackground);
+    --btn2-fg: var(--vscode-button-secondaryForeground);
+    --btn2-hover: var(--vscode-button-secondaryHoverBackground);
+    --input-bg: var(--vscode-input-background);
+    --input-fg: var(--vscode-input-foreground);
+    --input-border: var(--vscode-input-border, #3334);
+    --link: var(--vscode-textLink-foreground);
+    --warn: var(--vscode-editorWarning-foreground, #e8a400);
+    --success: var(--vscode-testing-iconPassed, #4caf50);
+    --badge-bg: var(--vscode-badge-background);
+    --badge-fg: var(--vscode-badge-foreground);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--vscode-font-family); font-size: 13px; }
+
+  .section { border-bottom: 1px solid var(--border); }
+  .section-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 7px 12px; cursor: pointer; user-select: none;
+    background: var(--header-bg);
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em;
+  }
+  .section-header:hover { filter: brightness(1.1); }
+  .section-header .chevron { margin-left: auto; font-size: 10px; }
+  .section-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .section-body.hidden { display: none; }
+
+  label { font-size: 11px; opacity: .7; display: block; margin-bottom: 2px; }
+  input[type="text"], select, textarea {
+    width: 100%; padding: 4px 8px;
+    background: var(--input-bg); color: var(--input-fg);
+    border: 1px solid var(--input-border); border-radius: 3px;
+    font-size: 12px; font-family: inherit; outline: none;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+
+  .row { display: flex; gap: 4px; align-items: center; }
+  .row input { flex: 1; }
+
+  button {
+    width: 100%; padding: 5px 10px; border: none; border-radius: 3px;
+    font-size: 12px; cursor: pointer; font-family: inherit;
+    background: var(--btn-bg); color: var(--btn-fg);
+  }
+  button:hover { background: var(--btn-hover); }
+  button.secondary { background: var(--btn2-bg); color: var(--btn2-fg); }
+  button.secondary:hover { background: var(--btn2-hover); }
+  button.small { width: auto; padding: 3px 8px; font-size: 11px; }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .info-row { font-size: 11px; opacity: .7; display: flex; justify-content: space-between; }
+  .badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 7px; font-size: 10px; }
+
+  .progress-wrap { display: none; flex-direction: column; gap: 4px; }
+  .progress-bar { height: 4px; background: var(--input-bg); border-radius: 2px; overflow: hidden; }
+  .progress-fill { height: 100%; width: 0; background: var(--btn-bg); transition: width .1s; }
+  .progress-text { font-size: 11px; opacity: .7; text-align: center; }
+
+  details { font-size: 12px; }
+  details summary { cursor: pointer; padding: 4px 0; user-select: none; list-style: none; display: flex; align-items: center; gap: 4px; }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: '▸'; font-size: 10px; transition: transform .15s; }
+  details[open] summary::before { content: '▾'; }
+  details summary:hover { color: var(--link); }
+
+  .missing-list { list-style: none; max-height: 220px; overflow-y: auto; margin-top: 4px; }
+  .missing-item { padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+  .missing-item code { font-family: var(--vscode-editor-font-family, monospace); color: var(--warn); }
+  .missing-item .loc { opacity: .6; font-size: 10px; display: flex; align-items: center; justify-content: space-between; }
+  .missing-item .loc a { color: var(--link); cursor: pointer; text-decoration: none; }
+  .missing-item .loc a:hover { text-decoration: underline; }
+
+  .plain-file { font-size: 11px; margin-bottom: 4px; }
+  .plain-file .fname { font-weight: 600; opacity: .8; }
+  .chip-wrap { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  .chip { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 8px; font-size: 11px; display: flex; align-items: center; gap: 4px; }
+  .chip button { width: auto; padding: 0 3px; font-size: 10px; background: none; color: var(--link); }
+  .chip button:hover { background: none; text-decoration: underline; }
+
+  .code-block { background: var(--input-bg); border-radius: 3px; padding: 6px 8px; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; word-break: break-all; white-space: pre-wrap; }
+
+  .flash { font-size: 11px; color: var(--success); animation: fadeout 2s forwards; }
+  @keyframes fadeout { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
+
+  .scan-stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat-box { flex: 1; background: var(--input-bg); border-radius: 4px; padding: 6px 10px; text-align: center; }
+  .stat-box .num { font-size: 20px; font-weight: 700; color: var(--warn); }
+  .stat-box .lbl { font-size: 10px; opacity: .7; }
+  .stat-box.ok .num { color: var(--success); }
+</style>
+</head>
+<body>
+
+<!-- ── Section 1: Configuration ── -->
+<div class="section" id="s-config">
+  <div class="section-header" onclick="toggleSection('s-config')">
+    ⚙ Configuration <span class="chevron">▾</span>
+  </div>
+  <div class="section-body" id="s-config-body">
+    <div>
+      <label>Locales Path</label>
+      <div class="row">
+        <input type="text" id="cfgLocalesPath" placeholder="src/assets/i18n" />
+        <button class="small" id="saveLocalesPath">✓</button>
+      </div>
+    </div>
+    <div>
+      <label>Source Locale</label>
+      <div class="row">
+        <input type="text" id="cfgSourceLocale" placeholder="es" />
+        <button class="small" id="saveSourceLocale">✓</button>
+      </div>
+    </div>
+    <div>
+      <label>Severity</label>
+      <select id="cfgSeverity">
+        <option value="error">Error</option>
+        <option value="warning">Warning</option>
+        <option value="info">Info</option>
+      </select>
+    </div>
+    <div class="info-row"><span>Structure</span><span id="structureVal">—</span></div>
+    <div class="info-row"><span>Locales loaded</span><span id="localesVal">—</span></div>
+    <div class="info-row"><span>Keys (source)</span><span id="keysVal">—</span></div>
+    <div id="savedFlash" style="display:none" class="flash">Settings saved ✓</div>
+    <div id="unsupportedWrap" style="display:none">
+      <button class="secondary" id="requestSupportBtn">Request structure support on GitHub</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Section 2: Project Scan ── -->
+<div class="section" id="s-scan">
+  <div class="section-header" onclick="toggleSection('s-scan')">
+    🔍 Project Scan <span class="chevron">▾</span>
+  </div>
+  <div class="section-body" id="s-scan-body">
+    <div style="display:flex;gap:6px">
+      <button id="scanBtn">Scan project</button>
+      <button class="secondary small" id="cancelScanBtn" style="display:none">Cancel</button>
+    </div>
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">0 / 0 files</div>
+    </div>
+    <div id="scanResults" style="display:none">
+      <div class="scan-stats" id="scanStats"></div>
+      <details id="detMissing" style="margin-top:8px">
+        <summary>Missing keys <span class="badge" id="badgeMissing">0</span></summary>
+        <ul class="missing-list" id="missingList"></ul>
+      </details>
+      <details id="detPlain" style="margin-top:6px">
+        <summary>Plain text suggestions <span class="badge" id="badgePlain">0</span></summary>
+        <div id="plainList" style="margin-top:6px"></div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- ── Section 3: Report Issue ── -->
+<div class="section" id="s-report">
+  <div class="section-header" onclick="toggleSection('s-report')">
+    🐛 Report Issue <span class="chevron">▾</span>
+  </div>
+  <div class="section-body" id="s-report-body">
+    <div>
+      <label>Type</label>
+      <select id="reportType">
+        <option value="false-positive">False Positive</option>
+        <option value="bug">Bug</option>
+        <option value="feature">Feature Request</option>
+        <option value="structure">Unsupported Structure</option>
+      </select>
+    </div>
+    <div>
+      <label>Description</label>
+      <textarea id="reportDesc" maxlength="500" placeholder="Describe the issue or false positive..."></textarea>
+    </div>
+    <button class="secondary" id="fetchContextBtn">Use active editor context</button>
+    <div id="contextWrap" style="display:none">
+      <label>Context (auto-filled)</label>
+      <div class="code-block" id="contextBlock"></div>
+    </div>
+    <button id="submitReportBtn">Open GitHub Issue ↗</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  const vscode = acquireVsCodeApi();
+
+  // ── Section collapse ──────────────────────────────────────────────────────
+  const collapsedSections = {};
+  function toggleSection(id) {
+    const body = document.getElementById(id + '-body');
+    const chevron = document.querySelector('#' + id + ' .chevron');
+    collapsedSections[id] = !collapsedSections[id];
+    body.classList.toggle('hidden', collapsedSections[id]);
+    chevron.textContent = collapsedSections[id] ? '▸' : '▾';
+  }
+  window.toggleSection = toggleSection;
+
+  // ── Message bus ──────────────────────────────────────────────────────────
+  window.addEventListener('message', e => {
+    const msg = e.data;
+    if (msg.type === 'state')        applyState(msg);
+    if (msg.type === 'scanProgress') applyProgress(msg);
+    if (msg.type === 'scanResult')   applyResult(msg);
+    if (msg.type === 'scanError')    { resetScanUI(); alert('Scan error: ' + msg.message); }
+    if (msg.type === 'settingsSaved') flashSaved();
+    if (msg.type === 'editorContext') applyContext(msg);
+  });
+
+  document.addEventListener('DOMContentLoaded', () => vscode.postMessage({ type: 'ready' }));
+
+  // ── Section 1: Configuration ─────────────────────────────────────────────
+  function applyState({ config, localeStructure, locales, keyCount }) {
+    document.getElementById('cfgLocalesPath').value = config.localesPath;
+    document.getElementById('cfgSourceLocale').value = config.sourceLocale;
+    document.getElementById('cfgSeverity').value = config.severity;
+    document.getElementById('structureVal').textContent = localeStructure ?? 'not detected';
+    document.getElementById('localesVal').textContent = locales.length + ' — ' + locales.join(', ');
+    document.getElementById('keysVal').textContent = keyCount;
+    const unsupported = !localeStructure;
+    document.getElementById('unsupportedWrap').style.display = unsupported ? 'block' : 'none';
+  }
+
+  function flashSaved() {
+    const el = document.getElementById('savedFlash');
+    el.style.display = 'block';
+    el.style.animation = 'none';
+    setTimeout(() => { el.style.animation = ''; el.style.display = 'none'; setTimeout(() => el.style.display = 'block', 10); }, 10);
+    setTimeout(() => el.style.display = 'none', 2200);
+  }
+
+  document.getElementById('saveLocalesPath').addEventListener('click', () => {
+    vscode.postMessage({ type: 'saveSetting', key: 'localesPath', value: document.getElementById('cfgLocalesPath').value.trim() });
+  });
+  document.getElementById('saveSourceLocale').addEventListener('click', () => {
+    vscode.postMessage({ type: 'saveSetting', key: 'sourceLocale', value: document.getElementById('cfgSourceLocale').value.trim() });
+  });
+  document.getElementById('cfgSeverity').addEventListener('change', e => {
+    vscode.postMessage({ type: 'saveSetting', key: 'severity', value: e.target.value });
+  });
+  document.getElementById('requestSupportBtn').addEventListener('click', () => {
+    const url = 'https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new'
+      + '?labels=structure-support&title=' + encodeURIComponent('[Structure] Support request: <describe your structure>');
+    vscode.postMessage({ type: 'openGithubIssue', url });
+  });
+
+  // ── Section 2: Scan ──────────────────────────────────────────────────────
+  function applyProgress({ done, total }) {
+    document.getElementById('progressWrap').style.display = 'flex';
+    document.getElementById('cancelScanBtn').style.display = 'inline-block';
+    document.getElementById('scanBtn').disabled = true;
+    document.getElementById('progressFill').style.width = total ? ((done / total) * 100) + '%' : '0%';
+    document.getElementById('progressText').textContent = done + ' / ' + total + ' files';
+  }
+
+  function resetScanUI() {
+    document.getElementById('progressWrap').style.display = 'none';
+    document.getElementById('cancelScanBtn').style.display = 'none';
+    document.getElementById('scanBtn').disabled = false;
+  }
+
+  function applyResult({ missingKeys, plainTextByFile }) {
+    resetScanUI();
+    document.getElementById('scanResults').style.display = 'block';
+
+    const fileCount = new Set(missingKeys.map(m => m.file)).size;
+    const ptCount = Object.keys(plainTextByFile).length;
+
+    const statsEl = document.getElementById('scanStats');
+    statsEl.innerHTML = '';
+    const addStat = (num, lbl, ok) => {
+      const div = document.createElement('div');
+      div.className = 'stat-box' + (ok ? ' ok' : '');
+      div.innerHTML = '<div class="num">' + num + '</div><div class="lbl">' + lbl + '</div>';
+      statsEl.appendChild(div);
+    };
+    addStat(missingKeys.length, 'missing keys', missingKeys.length === 0);
+    addStat(fileCount, 'files affected', fileCount === 0);
+    addStat(ptCount, 'untranslated', ptCount === 0);
+
+    document.getElementById('badgeMissing').textContent = missingKeys.length;
+    const list = document.getElementById('missingList');
+    list.innerHTML = '';
+    for (const item of missingKeys) {
+      const li = document.createElement('li');
+      li.className = 'missing-item';
+      li.innerHTML = '<code>' + escHtml(item.key) + '</code>'
+        + '<div class="loc"><span>' + escHtml(item.file) + ':' + item.line + '</span>'
+        + '<a data-fp="' + escHtml(item.filePath) + '" data-key="' + escHtml(item.key) + '">↗ open</a></div>';
+      li.querySelector('a').addEventListener('click', ev => {
+        vscode.postMessage({ type: 'openFile', filePath: ev.currentTarget.dataset.fp, key: ev.currentTarget.dataset.key });
+      });
+      list.appendChild(li);
+    }
+    if (missingKeys.length > 0) document.getElementById('detMissing').open = true;
+
+    const ptEntries = Object.entries(plainTextByFile);
+    document.getElementById('badgePlain').textContent = ptEntries.length;
+    const ptList = document.getElementById('plainList');
+    ptList.innerHTML = '';
+    for (const [file, texts] of ptEntries) {
+      const div = document.createElement('div');
+      div.className = 'plain-file';
+      div.innerHTML = '<div class="fname">' + escHtml(file) + '</div>';
+      const chips = document.createElement('div');
+      chips.className = 'chip-wrap';
+      for (const text of texts.slice(0, 8)) {
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        const label = document.createElement('span');
+        label.textContent = text.length > 30 ? text.slice(0, 30) + '…' : text;
+        label.title = text;
+        const btn = document.createElement('button');
+        btn.textContent = '+ key';
+        btn.addEventListener('click', () => vscode.postMessage({ type: 'createKey', key: text }));
+        chip.appendChild(label);
+        chip.appendChild(btn);
+        chips.appendChild(chip);
+      }
+      div.appendChild(chips);
+      ptList.appendChild(div);
+    }
+  }
+
+  document.getElementById('scanBtn').addEventListener('click', () => {
+    document.getElementById('scanResults').style.display = 'none';
+    vscode.postMessage({ type: 'scan' });
+  });
+  document.getElementById('cancelScanBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'cancelScan' });
+    resetScanUI();
+  });
+
+  // ── Section 3: Report Issue ──────────────────────────────────────────────
+  document.getElementById('fetchContextBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'getEditorContext' });
+  });
+
+  function applyContext({ selectedText, file, line, snippet }) {
+    const parts = [];
+    if (file) parts.push('File: ' + file + (line ? ':' + line : ''));
+    if (snippet) parts.push('Line: ' + snippet);
+    if (selectedText) parts.push('Selected: ' + selectedText);
+    const ctx = parts.join('\\n');
+    document.getElementById('contextBlock').textContent = ctx;
+    document.getElementById('contextWrap').style.display = 'block';
+  }
+
+  document.getElementById('submitReportBtn').addEventListener('click', () => {
+    const type = document.getElementById('reportType').value;
+    const desc = document.getElementById('reportDesc').value.trim();
+    const ctx = document.getElementById('contextBlock').textContent;
+    const labelMap = { 'false-positive': 'false-positive', 'bug': 'bug', 'feature': 'enhancement', 'structure': 'structure-support' };
+    const titleMap = { 'false-positive': '[False Positive] ', 'bug': '[Bug] ', 'feature': '[Feature] ', 'structure': '[Structure] ' };
+    const body = desc + (ctx ? '\\n\\n**Context:**\\n\`\`\`\\n' + ctx + '\\n\`\`\`' : '');
+    const url = 'https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new'
+      + '?labels=' + encodeURIComponent(labelMap[type])
+      + '&title=' + encodeURIComponent(titleMap[type])
+      + '&body=' + encodeURIComponent(body.slice(0, 4000));
+    vscode.postMessage({ type: 'openGithubIssue', url });
+  });
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+})();
+</script>
+</body>
+</html>`;
 }
 
 // ─── Exports ──────────────────────────────────────────────────────────────────
