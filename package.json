@@ -3,7 +3,7 @@
   "displayName": "i18n Studio Pro",
   "description": "Full-featured i18n management suite for VS Code. Real-time validation, inline translations, key table, hover across locales, CodeLens, sort keys, and plain-text detection. Supports ngx-translate and similar setups.",
   "publisher": "RamiroCR98",
-  "version": "2.1.4",
+  "version": "2.2.0",
   "license": "MIT",
   "icon": "icon.png",
   "engines": {

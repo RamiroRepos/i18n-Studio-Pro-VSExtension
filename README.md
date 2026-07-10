@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.1.4**
+**Version: 2.2.0**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -24,10 +24,14 @@ Supports two file structures:
 | **Inline Decorations** | HTML / TS | Shows the translated value in gray italic next to each key |
 | **Smart Hover** | HTML / TS | Hover a key to see all locale translations with links to each file |
 | **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language |
-| **Ctrl+Click** | HTML / TS | Jump to the source locale JSON at the exact key line |
+| **Ctrl+Click (HTML/TS)** | HTML / TS | Jump to the source locale JSON at the exact key line |
 | **IntelliSense** | HTML / TS | Autocompletes i18n keys inside `\| translate` and `translate.instant()` |
 | **Quick Fix** | HTML / TS | 💡 Creates a missing key in all locale files simultaneously |
 | **i18n Key Table** | Panel | Full key × locale table with search, missing filter and ↗ file links |
+| **Create missing from table** | Table | ✚ button on any missing cell opens the sidebar form prefilled for that key |
+| **Refresh table** | Table | ⟳ button reloads keys from disk when JSON is edited outside the extension |
+| **Locale navigation in JSON** | Locale JSON | Ctrl+Click jumps to the same key in the next locale (creates it empty if missing) |
+| **Prev / next locale CodeLens** | Locale JSON | `‹ ES` / `EN ›` lenses on the cursor's key line navigate between locales |
 | **Table for file** | Toolbar 🌐 | Opens the table filtered to the keys used in the active file |
 | **Plain text detection** | Table / Sidebar | Detects untranslated plain text in HTML and suggests creating keys |
 | **CodeLens in JSON** | Locale JSON | First-line actions: open table and sort keys A→Z |
@@ -75,9 +79,9 @@ When a key is marked as missing, the VS Code 💡 lightbulb appears. The action 
 ![Missing key error with Quick Fix](https://i.imgur.com/SvGLN2x.png)
 _Missing key with Quick Fix available_
 
-### Ctrl+Click — Go to Source
+### Ctrl+Click — Go to Source (HTML / TS)
 
-`Ctrl+Click` on any i18n key opens the source locale JSON file at the exact line where the key is defined.
+`Ctrl+Click` on any i18n key in an HTML template or TypeScript file opens the source locale JSON at the exact line where the key is defined.
 
 > 📸 _Screenshot: Ctrl+Click navigating to JSON file at key line_ — proximamente
 
@@ -94,8 +98,11 @@ Opens a **table panel** showing all keys as rows and each locale as a column. Fe
 - Filter by key name or translation value in real time
 - Toggle **Solo faltantes** to see only keys missing in at least one locale
 - Click `↗` on any cell to jump directly to that key in the locale JSON file
+- Missing cells show a **✚ crear** button that opens the sidebar **Add i18n Key** form, prefilled with the key, any existing translations, and focus on the missing locale
+- Button **⟳ Refrescar** to reload keys from disk — use it when a JSON file was edited outside the extension and the table did not pick up the change
 - Button **⇅ Ordenar A→Z** to sort all locale files alphabetically (with confirmation)
-- Table auto-refreshes when locale JSON files change
+- An in-panel toast confirms the result of sort and refresh actions
+- Table auto-refreshes when keys are created or locale JSON files change
 
 > 📸 _Screenshot: table panel with key rows, locale columns, missing cells highlighted_ — proximamente
 
@@ -133,6 +140,18 @@ The sort confirmation asks whether to sort **only this file** or **all locale fi
 > 📸 _Screenshot: CodeLens actions on first line of locale JSON file_ — proximamente
 
 > 📸 _Screenshot: sort confirmation modal asking "Solo este archivo" vs "Todos los locales"_ — proximamente
+
+### Locale navigation from JSON — jump between languages
+
+While editing a locale JSON file you can move the **same key** across languages without leaving the editor:
+
+- **`Ctrl+Click`** on a key jumps to that same key in the **next locale** file.
+- **`‹ ES` / `EN ›` CodeLens** appear on the line of the key where your cursor currently sits (only that line, not every key) and navigate to the **previous** / **next** locale.
+- If the key does **not** exist in the target locale, it is **created empty** and the cursor is placed inside the value string, ready for you to type the translation. The key table refreshes automatically.
+
+Locale order follows the same convention as everywhere else: **ES first, EN second**, the rest alphabetical, wrapping around from the last locale back to the first.
+
+> 📸 _Screenshot: ‹ ES / EN › navigation CodeLens on the cursor's key line_ — proximamente
 
 ---
 
@@ -237,7 +256,7 @@ The **🌐 button** in the editor toolbar (visible on `.html` and `.ts` files) i
 3. Scans each open `.html` and `.ts` file for `| translate` and `translate.instant/get/stream()` patterns
 4. Marks as error/warning/info any key not found in the source locale
 5. Shows inline decorations with the translation in gray italic next to each key
-6. `Ctrl+Click` navigates to the source locale JSON at the exact key line
+6. `Ctrl+Click` in HTML/TS navigates to the source locale JSON at the exact key line; in a locale JSON, it jumps to the same key in the next locale (creating it if missing)
 7. Watches locale JSON files for changes and re-validates automatically
 
 ---

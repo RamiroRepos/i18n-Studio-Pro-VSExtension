@@ -16,6 +16,9 @@ let keyFileMap = {};
 /** @type {string} */
 let localesAbsPath = '';
 
+/** Fires to force the locale-JSON CodeLenses to re-render (e.g. cursor moved). */
+const localeCodeLensEmitter = new vscode.EventEmitter();
+
 /** @type {vscode.DiagnosticCollection} */
 let diagnosticCollection;
 
@@ -157,6 +160,20 @@ function activate(context) {
         })
     );
 
+    // From the table: open the sidebar "Add i18n Key" form prefilled for a missing key
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.createMissingKey', async ({ key, focusLocale }) => {
+            await openAddKeyFormForMissing(key, focusLocale);
+        })
+    );
+
+    // Navigate to the same key in the previous/next locale JSON (auto-creating if missing)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.gotoLocaleKey', async ({ filePath, key, direction }) => {
+            await navigateToLocaleKey(filePath, key, direction);
+        })
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('i18nKV.sortLocaleFile', async ({ filePath }) => {
             await sortLocaleFile(filePath);
@@ -181,9 +198,28 @@ function activate(context) {
         }),
         vscode.languages.registerDefinitionProvider(langs, { provideDefinition }),
         vscode.languages.registerHoverProvider({ language: 'json' }, { provideHover: provideLocaleJsonHover }),
-        vscode.languages.registerCodeLensProvider({ language: 'json' }, { provideCodeLenses: provideLocaleJsonCodeLenses }),
+        vscode.languages.registerDefinitionProvider({ language: 'json' }, { provideDefinition: provideLocaleJsonDefinition }),
+        vscode.languages.registerCodeLensProvider({ language: 'json' }, {
+            provideCodeLenses: provideLocaleJsonCodeLenses,
+            onDidChangeCodeLenses: localeCodeLensEmitter.event,
+        }),
         vscode.window.registerWebviewViewProvider('i18nStudioPro.sidebar', sidebarViewProvider, {
             webviewOptions: { retainContextWhenHidden: true }
+        })
+    );
+
+    // Refresh navigation CodeLenses when the cursor moves within a locale JSON.
+    let lastLensLine = -1;
+    context.subscriptions.push(
+        vscode.window.onDidChangeTextEditorSelection(e => {
+            const doc = e.textEditor.document;
+            if (doc.languageId !== 'json') return;
+            if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return;
+            const line = e.selections[0]?.active.line ?? -1;
+            if (line !== lastLensLine) {
+                lastLensLine = line;
+                localeCodeLensEmitter.fire();
+            }
         })
     );
 }
@@ -797,6 +833,7 @@ async function createKeyWithTranslations(key, translations) {
     refreshAllDecorations();
 
     sidebarView?.webview.postMessage({ type: 'keyCreated', key });
+    if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
     vscode.window.showInformationMessage(`i18n Studio Pro: Key "${key}" created in ${createdIn.join(', ')} ✓`);
 }
 
@@ -904,11 +941,33 @@ function resolveJsonKeyAtPosition(doc, position) {
     const keyEnd = keyStart + keySegment.length + 2; // +2 for quotes
     if (position.character < keyStart || position.character > keyEnd) return null;
 
+    return resolveJsonKeyOnLine(doc, position.line);
+}
+
+/**
+ * Like resolveJsonKeyAtPosition but resolves from ANY position on a key-bearing
+ * line (no character-range check). Used for the navigation CodeLenses, which
+ * should appear wherever the cursor sits on the key's line.
+ * @param {vscode.TextDocument} doc
+ * @param {number} lineNo
+ * @returns {string | null}
+ */
+function resolveJsonKeyOnLine(doc, lineNo) {
+    const lineText = doc.lineAt(lineNo).text;
+    const keyOnLineMatch = lineText.match(/^\s*"([^"]+)"\s*:/);
+    if (!keyOnLineMatch) return null;
+
+    // Only leaf keys (with a string/number value) can be navigated; skip object
+    // openers like "company": { — those aren't translation entries.
+    if (/^\s*"[^"]+"\s*:\s*\{\s*$/.test(lineText)) return null;
+
+    const keySegment = keyOnLineMatch[1];
+
     // Walk backwards through the document to reconstruct the full key path
     const segments = [keySegment];
     let currentIndent = lineText.match(/^(\s*)/)[1].length;
 
-    for (let lineIdx = position.line - 1; lineIdx >= 0 && currentIndent > 0; lineIdx--) {
+    for (let lineIdx = lineNo - 1; lineIdx >= 0 && currentIndent > 0; lineIdx--) {
         const prevLine = doc.lineAt(lineIdx).text;
         const prevIndent = prevLine.match(/^(\s*)/)[1].length;
 
@@ -963,9 +1022,19 @@ function showI18nTable(context, filterDoc = null) {
             vscode.commands.executeCommand('i18nKV.openLocaleFile', { filePath: msg.filePath, key: msg.key });
         } else if (msg.type === 'createKey') {
             createKeyInAllLocales(msg.key);
+        } else if (msg.type === 'createMissingKey') {
+            vscode.commands.executeCommand('i18nKV.createMissingKey', { key: msg.key, focusLocale: msg.focusLocale });
+        } else if (msg.type === 'refresh') {
+            loadLocaleKeys();
+            if (tablePanel) {
+                tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+                tablePanel.webview.postMessage({ type: 'refreshed' });
+            }
         } else if (msg.type === 'sortAll') {
-            sortAllLocaleFiles().then(() => {
-                if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+            sortAllLocaleFiles().then((result) => {
+                if (!tablePanel) return;
+                tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+                tablePanel.webview.postMessage({ type: 'sorted', result });
             });
         }
     }, undefined, context.subscriptions);
@@ -1102,7 +1171,22 @@ function getTableHtml(_webview) {
     background: var(--btn-bg); color: var(--btn-fg); border: none;
   }
   .toolbar-btn:hover { background: var(--btn-hover); }
+  .toolbar-btn:disabled { opacity: 0.6; cursor: default; }
   .badge { background: var(--badge-bg); color: var(--badge-fg); border-radius: 10px; padding: 1px 7px; font-size: 11px; }
+
+  /* In-panel toast */
+  .toast {
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--vscode-notifications-background, #333);
+    color: var(--vscode-notifications-foreground, #fff);
+    border: 1px solid var(--border); border-left-width: 3px;
+    border-radius: 4px; padding: 8px 16px; font-size: 12px; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; z-index: 100;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.ok { border-left-color: var(--vscode-testing-iconPassed, #4caf50); }
+  .toast.warn { border-left-color: var(--vscode-editorWarning-foreground, #e2b93d); }
   .table-wrap { overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
   table { width: 100%; border-collapse: collapse; min-width: 400px; }
   thead th {
@@ -1116,6 +1200,12 @@ function getTableHtml(_webview) {
   td { padding: 4px 10px; border-bottom: 1px solid var(--border, #3334); vertical-align: top; max-width: 320px; word-break: break-word; }
   td.key-cell { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; white-space: nowrap; }
   td.missing { color: var(--missing-color); font-style: italic; }
+  .create-btn {
+    margin-left: 8px; border: 1px solid var(--link); background: none; color: var(--link);
+    border-radius: 3px; padding: 0 6px; font-size: 10px; cursor: pointer; font-style: normal;
+    opacity: 0.75; vertical-align: middle;
+  }
+  .create-btn:hover { opacity: 1; background: var(--link); color: var(--btn-fg, #fff); }
   .open-btn {
     background: none; border: none; cursor: pointer; color: var(--link);
     padding: 0 3px; font-size: 11px; vertical-align: middle; opacity: 0.7;
@@ -1161,6 +1251,7 @@ function getTableHtml(_webview) {
 <div class="toolbar">
   <input id="search" type="text" placeholder="Buscar key o valor..." autocomplete="off" />
   <label><input type="checkbox" id="onlyMissing" /> Solo faltantes</label>
+  <button class="toolbar-btn" id="refreshBtn" title="Recarga las keys desde los archivos JSON en disco">⟳ Refrescar</button>
   <button class="toolbar-btn" id="sortAllBtn" title="Ordena todas las keys de todos los locale JSON alfabéticamente">⇅ Ordenar A→Z</button>
 </div>
 <div class="table-wrap">
@@ -1177,6 +1268,7 @@ function getTableHtml(_webview) {
   <div class="suggestions-list" id="suggestionsList"></div>
 </div>
 </div>
+<div class="toast" id="toast"></div>
 <script>
   const vscode = acquireVsCodeApi();
   let _locales = [];
@@ -1191,8 +1283,40 @@ function getTableHtml(_webview) {
       renderRows();
       renderFileContext(fileName);
       renderSuggestions(suggestions || []);
+    } else if (e.data.type === 'sorted') {
+      handleSorted(e.data.result);
+    } else if (e.data.type === 'refreshed') {
+      showToast('⟳ Tabla actualizada desde disco', 'ok');
     }
   });
+
+  function handleSorted(result) {
+    const btn = document.getElementById('sortAllBtn');
+    if (!result || result.status === 'cancelled') { resetSortBtn(); return; }
+    if (result.status === 'ok') {
+      showToast('✓ ' + result.count + ' archivo(s) ordenados A→Z', 'ok');
+    } else if (result.status === 'no-files') {
+      showToast('No se encontraron archivos de locale', 'warn');
+    } else {
+      showToast('Ordenado con ' + (result.errors || 0) + ' error(es)', 'warn');
+    }
+    resetSortBtn();
+  }
+
+  function resetSortBtn() {
+    const btn = document.getElementById('sortAllBtn');
+    btn.disabled = false;
+    btn.textContent = '⇅ Ordenar A→Z';
+  }
+
+  let _toastTimer = null;
+  function showToast(message, kind) {
+    const toast = document.getElementById('toast');
+    toast.textContent = message;
+    toast.className = 'toast show ' + (kind || 'ok');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { toast.className = 'toast'; }, 3500);
+  }
 
   function renderFileContext(fileName) {
     const ctx = document.getElementById('fileContext');
@@ -1274,7 +1398,17 @@ function getTableHtml(_webview) {
         const filePath = row.files[locale];
         if (val === null || val === undefined) {
           td.className = 'missing';
-          td.textContent = '(missing)';
+          const label = document.createElement('span');
+          label.textContent = '(missing)';
+          td.appendChild(label);
+          const createBtn = document.createElement('button');
+          createBtn.className = 'create-btn';
+          createBtn.title = 'Crear esta key (abre el formulario en el panel lateral)';
+          createBtn.textContent = '✚ crear';
+          createBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'createMissingKey', key: row.key, focusLocale: locale });
+          });
+          td.appendChild(createBtn);
         } else {
           const span = document.createElement('span');
           span.textContent = String(val);
@@ -1304,19 +1438,157 @@ function getTableHtml(_webview) {
   document.getElementById('search').addEventListener('input', renderRows);
   document.getElementById('onlyMissing').addEventListener('change', renderRows);
   document.getElementById('sortAllBtn').addEventListener('click', () => {
+    const btn = document.getElementById('sortAllBtn');
+    btn.disabled = true;
+    btn.textContent = '⇅ Ordenando…';
     vscode.postMessage({ type: 'sortAll' });
+  });
+  document.getElementById('refreshBtn').addEventListener('click', () => {
+    vscode.postMessage({ type: 'refresh' });
   });
 </script>
 </body>
 </html>`;
 }
 
+// ─── Navegación entre locales desde un JSON ───────────────────────────────────
+
+/**
+ * Given the path of an open locale JSON file, returns which locale it belongs to.
+ * Works for both flat ({root}/en.json) and namespaced ({root}/en/ns.json) layouts.
+ * @param {string} filePath
+ * @returns {string | null}
+ */
+function localeFromFilePath(filePath) {
+    if (!localesAbsPath) return null;
+    const rel = path.relative(localesAbsPath, filePath);
+    if (rel.startsWith('..')) return null;
+    const parts = rel.split(/[\\/]/);
+    if (parts.length === 1) return path.basename(parts[0], '.json'); // flat: en.json
+    return parts[0]; // namespaced: en/ns.json → "en"
+}
+
+/**
+ * Resolves the destination file where `key` lives (or should be created) for a
+ * given target locale, mirroring the namespace of the current file when needed.
+ * @param {string} targetLocale
+ * @param {string} key            full dot-notation key
+ * @param {string} currentFilePath the file the user is navigating from
+ * @returns {string | null}
+ */
+function localeFileForKey(targetLocale, key, currentFilePath) {
+    // If the key already exists in the target locale, use its known file.
+    const known = keyFileMap[targetLocale]?.[key];
+    if (known) return known;
+
+    if (!localesAbsPath) return null;
+    const structure = localeStructure ?? detectLocaleStructure(localesAbsPath);
+
+    if (structure === 'namespaced') {
+        // Mirror the namespace file of the current file (e.g. common.json)
+        const nsFile = path.basename(currentFilePath);
+        return path.join(localesAbsPath, targetLocale, nsFile);
+    }
+    return path.join(localesAbsPath, `${targetLocale}.json`);
+}
+
+/**
+ * Navigate from the current locale JSON to the same key in the previous/next
+ * locale. If the key is missing there, it is created empty and the cursor is
+ * placed inside the (empty) value string so the user can type the translation.
+ * @param {string} currentFilePath
+ * @param {string} key
+ * @param {number} direction  +1 = next locale, -1 = previous locale
+ */
+async function navigateToLocaleKey(currentFilePath, key, direction) {
+    const locales = sortedLocales();
+    if (locales.length < 2) {
+        vscode.window.showInformationMessage('i18n Studio Pro: Solo hay un locale.');
+        return;
+    }
+
+    const currentLocale = localeFromFilePath(currentFilePath);
+    const idx = locales.indexOf(currentLocale);
+    if (idx === -1) return;
+
+    const targetLocale = locales[(idx + direction + locales.length) % locales.length];
+    const targetFile = localeFileForKey(targetLocale, key, currentFilePath);
+    if (!targetFile) return;
+
+    // Auto-create the key (empty) if it doesn't exist in the target locale
+    const exists = allLocaleKeys[targetLocale]?.[key] !== undefined;
+    if (!exists) {
+        let json = {};
+        if (fs.existsSync(targetFile)) {
+            try { json = JSON.parse(fs.readFileSync(targetFile, 'utf8')); } catch (_) { json = {}; }
+        }
+        setNestedKey(json, key.split('.'), '');
+        try {
+            fs.mkdirSync(path.dirname(targetFile), { recursive: true });
+            fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
+        } catch (e) {
+            vscode.window.showErrorMessage(`i18n Studio Pro: No se pudo crear la key en ${targetLocale}: ${e.message}`);
+            return;
+        }
+        loadLocaleKeys();
+        if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
+    }
+
+    // Open the target file and place the cursor inside the value string
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(targetFile));
+    const editor = await vscode.window.showTextDocument(doc);
+    const lastSegment = key.split('.').pop();
+    const lines = doc.getText().split('\n');
+
+    let pos = new vscode.Position(0, 0);
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        // Match:  "lastSegment": "value"
+        const m = line.match(new RegExp('"' + escapeRegExp(lastSegment) + '"\\s*:\\s*"'));
+        if (m) {
+            // Cursor goes just after the opening quote of the value
+            const valueQuoteIdx = line.indexOf('"', m.index + m[0].length - 1);
+            pos = new vscode.Position(i, valueQuoteIdx + 1);
+            break;
+        }
+    }
+    editor.selection = new vscode.Selection(pos, pos);
+    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+
+    if (!exists) {
+        vscode.window.setStatusBarMessage(`i18n Studio Pro: key creada en ${targetLocale} — escribe la traducción`, 4000);
+    }
+}
+
+/** Escapes a string for safe use inside a RegExp. */
+function escapeRegExp(s) {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Ctrl+Click on a key inside a locale JSON jumps to the same key in the NEXT
+ * locale, creating it empty there if it doesn't exist. Runs the navigation
+ * itself (it may write a file + move the cursor) and returns null so VS Code
+ * does not perform its own default navigation.
+ * @param {vscode.TextDocument} doc
+ * @param {vscode.Position} position
+ * @returns {null}
+ */
+function provideLocaleJsonDefinition(doc, position) {
+    if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return null;
+    const key = resolveJsonKeyOnLine(doc, position.line);
+    if (!key) return null;
+    navigateToLocaleKey(doc.uri.fsPath, key, 1);
+    return null;
+}
+
 // ─── CodeLens para locale JSON ───────────────────────────────────────────────
 
 /**
- * Provides two CodeLens actions on the first line of any locale JSON file:
- *  1. "Ver tabla i18n"  — opens the key table
- *  2. "Ordenar keys A→Z" — sorts all keys alphabetically (with confirmation)
+ * Provides CodeLens actions on locale JSON files:
+ *  - On the first line: "Ver tabla i18n" + "Ordenar keys A→Z"
+ *  - On the line where the cursor currently sits (if it's a key): navigation
+ *    lenses "‹ {prevLocale}" and "{nextLocale} ›" for the resolved key.
  * @param {vscode.TextDocument} doc
  * @returns {vscode.CodeLens[]}
  */
@@ -1325,21 +1597,52 @@ function provideLocaleJsonCodeLenses(doc) {
 
     const topLine = new vscode.Range(0, 0, 0, 0);
     const filePath = doc.uri.fsPath;
+    const lenses = [];
 
-    const lensTable = new vscode.CodeLens(topLine, {
+    lenses.push(new vscode.CodeLens(topLine, {
         title: '$(table) Ver tabla i18n',
         command: 'i18nKV.showTable',
         tooltip: 'Abrir la tabla completa de keys × idiomas',
-    });
+    }));
 
-    const lensSort = new vscode.CodeLens(topLine, {
+    lenses.push(new vscode.CodeLens(topLine, {
         title: '$(sort-precedence) Ordenar keys A→Z',
         command: 'i18nKV.sortLocaleFile',
         arguments: [{ filePath }],
         tooltip: 'Ordena todas las keys de este archivo JSON alfabéticamente (recursivo)',
-    });
+    }));
 
-    return [lensTable, lensSort];
+    // Navigation lenses only on the line where the cursor currently is.
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.uri.fsPath === filePath) {
+        const cursorPos = editor.selection.active;
+        const key = resolveJsonKeyOnLine(doc, cursorPos.line);
+        if (key) {
+            const locales = sortedLocales();
+            const currentLocale = localeFromFilePath(filePath);
+            const idx = locales.indexOf(currentLocale);
+            if (idx !== -1 && locales.length > 1) {
+                const prevLocale = locales[(idx - 1 + locales.length) % locales.length];
+                const nextLocale = locales[(idx + 1) % locales.length];
+                const lineRange = new vscode.Range(cursorPos.line, 0, cursorPos.line, 0);
+
+                lenses.push(new vscode.CodeLens(lineRange, {
+                    title: `$(arrow-left) ${prevLocale.toUpperCase()}`,
+                    command: 'i18nKV.gotoLocaleKey',
+                    arguments: [{ filePath, key, direction: -1 }],
+                    tooltip: `Ir a "${key}" en ${prevLocale} (se crea si falta)`,
+                }));
+                lenses.push(new vscode.CodeLens(lineRange, {
+                    title: `${nextLocale.toUpperCase()} $(arrow-right)`,
+                    command: 'i18nKV.gotoLocaleKey',
+                    arguments: [{ filePath, key, direction: 1 }],
+                    tooltip: `Ir a "${key}" en ${nextLocale} (se crea si falta) — o Ctrl+Click sobre la key`,
+                }));
+            }
+        }
+    }
+
+    return lenses;
 }
 
 // ─── Sort locale files ────────────────────────────────────────────────────────
@@ -1453,7 +1756,7 @@ async function sortAllLocaleFiles() {
 
     if (files.length === 0) {
         vscode.window.showWarningMessage('i18nKV: No se encontraron archivos de locale.');
-        return;
+        return { status: 'no-files' };
     }
 
     const fileNames = files.map(f => path.relative(localesAbsPath, f)).join(', ');
@@ -1462,13 +1765,15 @@ async function sortAllLocaleFiles() {
         { modal: true },
         'Ordenar todos'
     );
-    if (confirm !== 'Ordenar todos') return;
+    if (confirm !== 'Ordenar todos') return { status: 'cancelled' };
 
     const errors = sortFiles(files);
     loadLocaleKeys();
     if (errors === 0) {
         vscode.window.showInformationMessage(`i18nKV: ${files.length} archivos ordenados ✓`);
+        return { status: 'ok', count: files.length };
     }
+    return { status: 'error', count: files.length, errors };
 }
 
 // ─── Sidebar WebviewView ──────────────────────────────────────────────────────
@@ -1569,6 +1874,44 @@ async function runProjectScan() {
         log(`Scan complete: ${total} files, ${missingKeys.length} missing keys, ${Object.keys(plainTextByFile).length} files with plain text suggestions (${elapsed}s)`);
         sidebarView.webview.postMessage({ type: 'scanResult', missingKeys, plainTextByFile });
     }
+}
+
+/**
+ * Reveals the sidebar and opens the "Add i18n Key" form prefilled for an
+ * existing key that is missing in one or more locales. Existing translations
+ * from other locales are prefilled; focus goes to the missing locale.
+ * @param {string} key           full dot-notation key (e.g. "dashboard.title")
+ * @param {string} [focusLocale] locale whose input should receive focus
+ */
+async function openAddKeyFormForMissing(key, focusLocale) {
+    // Reveal the sidebar view so the form is visible
+    try {
+        await vscode.commands.executeCommand('i18nStudioPro.sidebar.focus');
+    } catch (_) { }
+
+    const cfg = getConfig();
+    const locs = sortedLocales();
+
+    // Prefill any translations that already exist for this key
+    const existing = {};
+    for (const locale of locs) {
+        const val = allLocaleKeys[locale]?.[key];
+        if (val !== null && val !== undefined) existing[locale] = String(val);
+    }
+
+    const post = () => sidebarView?.webview.postMessage({
+        type: 'openAddKeyForm',
+        text: '',
+        keyName: key,
+        focusLocale: focusLocale || locs.find(l => existing[l] === undefined) || cfg.sourceLocale,
+        existing,
+        sourceLocale: cfg.sourceLocale,
+        locales: locs,
+    });
+
+    // The view may still be resolving on first reveal; give it a beat.
+    if (sidebarView) post();
+    else setTimeout(post, 350);
 }
 
 function handleSidebarMessage(msg) {
@@ -1907,7 +2250,13 @@ function getSidebarHtml() {
     if (msg.type === 'scanError')      { resetScanUI(); alert('Scan error: ' + msg.message); }
     if (msg.type === 'settingsSaved')  flashSaved();
     if (msg.type === 'editorContext')  applyContext(msg);
-    if (msg.type === 'openAddKeyForm') { buildAddKeyForm(msg); openSection('s-addkey'); document.getElementById('s-addkey').scrollIntoView({ behavior: 'smooth' }); }
+    if (msg.type === 'openAddKeyForm') {
+      buildAddKeyForm(msg);
+      openSection('s-addkey');
+      document.getElementById('s-addkey').scrollIntoView({ behavior: 'smooth' });
+      const focusId = msg.focusLocale ? 'addkey-locale-' + msg.focusLocale : 'addKeyName';
+      setTimeout(() => { document.getElementById(focusId)?.focus(); }, 120);
+    }
     if (msg.type === 'keyCreated')     {
       const fb = document.getElementById('addKeyFeedback');
       fb.textContent = '✓ Key "' + escHtml(msg.key) + '" created!';
@@ -2055,24 +2404,32 @@ function getSidebarHtml() {
   let _addKeyLocales = [];
   let _addKeySource = '';
 
-  function buildAddKeyForm({ text, sourceLocale, locales }) {
+  function buildAddKeyForm({ text, sourceLocale, locales, keyName, focusLocale, existing }) {
     _addKeyLocales = locales;
     _addKeySource = sourceLocale;
+    existing = existing || {};
 
-    // Auto-suggest key name from text: lowercase, replace spaces with dots
-    const suggested = text
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .trim()
-      .replace(/\\s+/g, '.')
-      .slice(0, 40);
-    document.getElementById('addKeyName').value = suggested;
+    // If an explicit key was provided (missing-key flow), use it verbatim.
+    // Otherwise auto-suggest a key name from the plain text.
+    let keyValue;
+    if (keyName) {
+      keyValue = keyName;
+    } else {
+      keyValue = text
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .trim()
+        .replace(/\\s+/g, '.')
+        .slice(0, 40);
+    }
+    document.getElementById('addKeyName').value = keyValue;
 
     const wrap = document.getElementById('addKeyLocalesWrap');
     wrap.innerHTML = '';
 
     for (const locale of locales) {
       const isSource = locale === sourceLocale;
+      const existingVal = existing[locale];
       const row = document.createElement('div');
       row.className = 'locale-row' + (isSource ? ' source-locale-row' : '');
 
@@ -2086,8 +2443,12 @@ function getSidebarHtml() {
       const input = document.createElement('input');
       input.type = 'text';
       input.id = 'addkey-locale-' + locale;
-      input.placeholder = isSource ? text : 'Translation...';
-      if (isSource) input.value = text;
+      if (existingVal !== undefined) {
+        input.value = existingVal;
+      } else if (isSource && text) {
+        input.value = text;
+      }
+      input.placeholder = isSource && text ? text : 'Translation...';
       inputWrap.appendChild(input);
 
       if (!isSource) {
