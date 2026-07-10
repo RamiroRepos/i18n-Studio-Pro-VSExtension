@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.2.1**
+**Version: 2.3.0**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -22,8 +22,9 @@ Supports two file structures:
 |---|---|---|
 | **Real-time Validation** | HTML / TS | Flags keys missing in the source **or** incomplete in any locale — stays until 100% translated |
 | **Inline Decorations** | HTML / TS | Shows the translated value in gray italic next to each key |
-| **Smart Hover** | HTML / TS | Hover a key to see all locale translations with links to each file |
-| **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language |
+| **Smart Hover** | HTML / TS | Hover a key to see all locale translations, file links, and an ✎ _Abrir en formulario_ button |
+| **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language, plus the ✎ _Abrir en formulario_ button |
+| **Edit key from hover** | Hover | ✎ button opens the sidebar form loaded with the key and all its current translations |
 | **Ctrl+Click (HTML/TS)** | HTML / TS | Jump to the source locale JSON at the exact key line |
 | **IntelliSense** | HTML / TS | Autocompletes i18n keys inside `\| translate` and `translate.instant()` |
 | **Quick Fix** | HTML / TS | 💡 Creates a missing key in all locale files simultaneously |
@@ -66,14 +67,14 @@ Shows the translation text in **gray italic** next to each key, directly in the 
 
 ### Smart Hover — HTML & TypeScript
 
-Hover over any i18n key to see its translations across all available locales. Fixed order: **ES first, EN second**, rest alphabetical. Each locale includes a link that opens the JSON file at the exact key line.
+Hover over any i18n key to see its translations across all available locales. Fixed order: **ES first, EN second**, rest alphabetical. Each locale includes a link that opens the JSON file at the exact key line, and an **✎ Abrir en formulario** button that opens the sidebar form loaded with that key and all its translations.
 
 ![Hover with translations across all locales](https://i.imgur.com/tewZzRx.png)
 _Hover showing translations for ES, EN and FR with direct links to each locale file_
 
 ### Hover in Locale JSON files
 
-When editing a `.json` locale file, hover over any key to see its translations in **all other languages**. Each entry shows a direct link to open that locale at the exact key line. Works for both flat and namespaced structures.
+When editing a `.json` locale file, hover over any key to see its translations in **all other languages**. Each entry shows a direct link to open that locale at the exact key line, plus an **✎ Abrir en formulario** button to edit all translations from the sidebar. Works for both flat and namespaced structures.
 
 > 📸 _Screenshot: hover on JSON key showing translations in EN, FR_ — proximamente
 
@@ -121,17 +122,17 @@ A **🌐 globe icon** appears in the editor toolbar when viewing an `.html` or `
 
 ### Add i18n Key — sidebar form
 
-The **✚ Add i18n Key** section in the sidebar provides a full form to create a new key across all locales:
+The **✚ Add i18n Key** section in the sidebar is a full form to create **or edit** a key across all locales:
 
-- **Key field** — dot-notation (e.g. `common.save`). Auto-suggested when opening from a plain-text chip.
-- **Per-locale inputs** — one input per detected locale, each labeled with a flag emoji.
+- **Key field** — dot-notation (e.g. `common.save`). **Locked (read-only) by default** with a 🔒 / ✏️ toggle; click it to rename the key when you really need to. This prevents accidental edits when you opened the form just to complete translations.
+- **Per-locale inputs** — one input per detected locale, each labeled with a flag emoji. Existing translations are pre-filled when editing.
 - **⚡ Translate** — auto-translates that locale from the source locale using the MyMemory API (no API key required).
-- **⚡ Translate All** — fills all non-source locales in parallel with one click.
-- **✓ Create Key** — writes the key to all locale JSON files simultaneously.
+- **⚡ Translate All** — translates every non-source locale from the **source locale (`es` by default)** and shows a **before → after diff panel**. Nothing is applied until you press **✓ Confirmar todo**; **✕ Cancelar** discards the proposal so your current values stay untouched.
+- **✓ Create Key** — writes the key to all locale JSON files simultaneously (upsert — also used to save edits).
 
-Opening from a plain-text suggestion chip pre-fills the key name and source value automatically.
+The form opens pre-filled from three places: a plain-text suggestion chip (key + source value), the ✚ crear button on a missing table cell (key + existing translations, focus on the missing locale), and the ✎ _Abrir en formulario_ button in any key hover.
 
-> 📸 _Screenshot: Add i18n Key form in sidebar with locale inputs and translate buttons_ — proximamente
+> 📸 _Screenshot: Add i18n Key form with locked key field and Translate All diff panel_ — proximamente
 
 ### CodeLens in locale JSON files
 

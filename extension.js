@@ -174,6 +174,13 @@ function activate(context) {
         })
     );
 
+    // From a hover: open the sidebar form to edit all translations of an existing key
+    context.subscriptions.push(
+        vscode.commands.registerCommand('i18nKV.editKeyInForm', async ({ key }) => {
+            await openAddKeyFormForMissing(key);
+        })
+    );
+
     context.subscriptions.push(
         vscode.commands.registerCommand('i18nKV.sortLocaleFile', async ({ filePath }) => {
             await sortLocaleFile(filePath);
@@ -556,7 +563,19 @@ function provideHover(doc, position) {
         );
     }
 
+    md.appendMarkdown(`\n---\n\n${editInFormLink(key)}\n`);
+
     return new vscode.Hover(md, usage.range);
+}
+
+/**
+ * Builds a markdown command link that opens the sidebar form for a key.
+ * @param {string} key
+ * @returns {string}
+ */
+function editInFormLink(key) {
+    const args = encodeURIComponent(JSON.stringify({ key }));
+    return `[$(edit) Abrir en formulario](command:i18nKV.editKeyInForm?${args} "Editar todas las traducciones de esta key en el panel lateral")`;
 }
 
 // ─── Ctrl+Click → go to source locale file ───────────────────────────────────
@@ -953,6 +972,8 @@ function provideLocaleJsonHover(doc, position) {
             : `${label} &nbsp; *(missing)* &nbsp; ${openLink}\n\n`
         );
     }
+
+    md.appendMarkdown(`\n---\n\n${editInFormLink(fullKey)}\n`);
 
     return new vscode.Hover(md);
 }
@@ -2131,6 +2152,23 @@ function getSidebarHtml() {
   .source-locale-row label { color: var(--vscode-terminal-ansiCyan); }
   .source-locale-row label::after { content: ' (source)'; font-size: 10px; opacity: .6; }
 
+  .key-input-wrap { display: flex; gap: 4px; align-items: center; }
+  .key-input-wrap input { flex: 1; }
+  .key-input-wrap input[readonly] { opacity: .7; font-style: italic; }
+  .lock-btn { width: auto; padding: 2px 8px; font-size: 12px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .lock-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
+
+  /* Translate-All diff confirmation */
+  .translate-diff { margin-top: 10px; border: 1px solid var(--vscode-editorWidget-border, #4444); border-radius: 4px; padding: 8px; background: var(--vscode-editorWidget-background); }
+  .translate-diff-title { font-size: 11px; font-weight: 600; opacity: .8; margin-bottom: 6px; }
+  .diff-row { font-size: 11px; padding: 3px 0; border-bottom: 1px solid var(--vscode-editorWidget-border, #3333); }
+  .diff-row:last-child { border-bottom: none; }
+  .diff-locale { font-weight: 600; text-transform: uppercase; opacity: .75; }
+  .diff-before { color: var(--vscode-errorForeground, #e06c6c); text-decoration: line-through; opacity: .75; }
+  .diff-before.empty { font-style: italic; text-decoration: none; opacity: .5; }
+  .diff-arrow { opacity: .5; margin: 0 4px; }
+  .diff-after { color: var(--vscode-terminal-ansiGreen, #4caf50); }
+
   .flash { font-size: 11px; color: var(--success); animation: fadeout 2s forwards; }
   @keyframes fadeout { 0%{opacity:1} 70%{opacity:1} 100%{opacity:0} }
 
@@ -2218,13 +2256,25 @@ function getSidebarHtml() {
   <div class="section-body hidden" id="s-addkey-body">
     <div>
       <label>Key <span style="font-size:10px;opacity:.6">(dot notation, e.g. common.save)</span></label>
-      <input type="text" id="addKeyName" placeholder="common.save" />
+      <div class="key-input-wrap">
+        <input type="text" id="addKeyName" placeholder="common.save" readonly />
+        <button id="addKeyLockBtn" class="lock-btn" title="Habilitar edición de la key">🔒</button>
+      </div>
     </div>
     <div id="addKeyLocalesWrap"></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-      <button id="addKeyTranslateAllBtn" class="secondary small">⚡ Translate All</button>
+      <button id="addKeyTranslateAllBtn" class="secondary small" title="Traduce todos los idiomas desde el idioma fuente">⚡ Translate All</button>
       <button id="addKeyCreateBtn">✓ Create Key</button>
       <button class="secondary small" id="addKeyCancelBtn">Cancel</button>
+    </div>
+    <!-- Translate-All diff confirmation panel -->
+    <div id="addKeyDiff" class="translate-diff" style="display:none">
+      <div class="translate-diff-title">Cambios propuestos (fuente: <span id="addKeyDiffSource">es</span>)</div>
+      <div id="addKeyDiffList"></div>
+      <div style="display:flex;gap:6px;margin-top:8px">
+        <button id="addKeyDiffConfirm">✓ Confirmar todo</button>
+        <button class="secondary small" id="addKeyDiffCancel">✕ Cancelar</button>
+      </div>
     </div>
     <div id="addKeyFeedback" style="display:none;margin-top:6px;font-size:11px;color:var(--vscode-terminal-ansiGreen)"></div>
   </div>
@@ -2465,7 +2515,13 @@ function getSidebarHtml() {
         .replace(/\\s+/g, '.')
         .slice(0, 40);
     }
-    document.getElementById('addKeyName').value = keyValue;
+    const keyInput = document.getElementById('addKeyName');
+    keyInput.value = keyValue;
+    // Key is locked (read-only) by default; the lock toggle enables editing.
+    setKeyLocked(true);
+
+    // Hide any leftover diff panel from a previous session
+    document.getElementById('addKeyDiff').style.display = 'none';
 
     const wrap = document.getElementById('addKeyLocalesWrap');
     wrap.innerHTML = '';
@@ -2542,6 +2598,22 @@ function getSidebarHtml() {
     return map[locale.split('-')[0]] || '🌐';
   }
 
+  // ── Key lock toggle ──────────────────────────────────────────────────────
+  function setKeyLocked(locked) {
+    const input = document.getElementById('addKeyName');
+    const btn = document.getElementById('addKeyLockBtn');
+    input.readOnly = locked;
+    btn.textContent = locked ? '🔒' : '✏️';
+    btn.title = locked ? 'Habilitar edición de la key' : 'Bloquear la key';
+    if (!locked) { input.focus(); }
+  }
+  document.getElementById('addKeyLockBtn').addEventListener('click', () => {
+    setKeyLocked(!document.getElementById('addKeyName').readOnly);
+  });
+
+  // ── Translate All → propose a diff, apply only on confirm ────────────────
+  let _pendingTranslations = null; // { locale: proposedValue }
+
   document.getElementById('addKeyTranslateAllBtn').addEventListener('click', async () => {
     const srcVal = document.getElementById('addkey-locale-' + _addKeySource)?.value.trim();
     if (!srcVal) {
@@ -2551,18 +2623,60 @@ function getSidebarHtml() {
     const btn = document.getElementById('addKeyTranslateAllBtn');
     btn.classList.add('loading');
     btn.textContent = '⏳ Translating...';
+
     const nonSource = _addKeyLocales.filter(l => l !== _addKeySource);
+    const proposals = {};
     await Promise.allSettled(nonSource.map(async locale => {
-      const input = document.getElementById('addkey-locale-' + locale);
-      if (!input) return;
       try {
-        input.value = await translateText(srcVal, _addKeySource, locale);
-      } catch (_) {
-        input.placeholder = 'Translation failed';
-      }
+        proposals[locale] = await translateText(srcVal, _addKeySource, locale);
+      } catch (_) { /* skip locales that fail to translate */ }
     }));
+
     btn.classList.remove('loading');
     btn.innerHTML = '⚡ Translate All';
+    showTranslateDiff(proposals);
+  });
+
+  function showTranslateDiff(proposals) {
+    _pendingTranslations = proposals;
+    const list = document.getElementById('addKeyDiffList');
+    document.getElementById('addKeyDiffSource').textContent = _addKeySource.toUpperCase();
+    list.innerHTML = '';
+
+    const locales = Object.keys(proposals);
+    if (!locales.length) {
+      list.innerHTML = '<div class="diff-row" style="opacity:.6">No se pudo traducir ningún idioma.</div>';
+    }
+    for (const locale of locales) {
+      const before = (document.getElementById('addkey-locale-' + locale)?.value || '').trim();
+      const after = proposals[locale];
+      const row = document.createElement('div');
+      row.className = 'diff-row';
+      const beforeHtml = before
+        ? '<span class="diff-before">' + escHtml(before) + '</span>'
+        : '<span class="diff-before empty">(vacío)</span>';
+      row.innerHTML = '<span class="diff-locale">' + escHtml(locale) + '</span> '
+        + beforeHtml + '<span class="diff-arrow">→</span>'
+        + '<span class="diff-after">' + escHtml(after) + '</span>';
+      list.appendChild(row);
+    }
+    document.getElementById('addKeyDiff').style.display = 'block';
+  }
+
+  document.getElementById('addKeyDiffConfirm').addEventListener('click', () => {
+    if (_pendingTranslations) {
+      for (const locale of Object.keys(_pendingTranslations)) {
+        const input = document.getElementById('addkey-locale-' + locale);
+        if (input) input.value = _pendingTranslations[locale];
+      }
+    }
+    _pendingTranslations = null;
+    document.getElementById('addKeyDiff').style.display = 'none';
+  });
+
+  document.getElementById('addKeyDiffCancel').addEventListener('click', () => {
+    _pendingTranslations = null;
+    document.getElementById('addKeyDiff').style.display = 'none';
   });
 
   document.getElementById('addKeyCreateBtn').addEventListener('click', () => {
