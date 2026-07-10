@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.2.0**
+**Version: 2.2.1**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -20,7 +20,7 @@ Supports two file structures:
 
 | Feature | Where | Description |
 |---|---|---|
-| **Real-time Validation** | HTML / TS | Underlines keys not found in the source locale |
+| **Real-time Validation** | HTML / TS | Flags keys missing in the source **or** incomplete in any locale — stays until 100% translated |
 | **Inline Decorations** | HTML / TS | Shows the translated value in gray italic next to each key |
 | **Smart Hover** | HTML / TS | Hover a key to see all locale translations with links to each file |
 | **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language |
@@ -49,7 +49,12 @@ Supports two file structures:
 
 ### Real-time Validation
 
-Detects all i18n keys used in HTML templates and TypeScript files. Underlines any key that does not exist in the source locale. Automatically updates when locale JSON files are edited.
+Detects all i18n keys used in HTML templates and TypeScript files, and keeps them flagged until they are **100% translated across every locale**:
+
+- **Missing key** — the key does not exist in the source locale. Quick Fix: _Crear key en todos los locales_.
+- **Incomplete key** — the key exists in the source but is **missing or empty** in one or more other locales. The diagnostic lists exactly which locales are missing (e.g. _missing/empty in: en, fr_) and stays visible until every locale has a non-empty value. Quick Fix: _Completar traducciones_ opens the sidebar form prefilled with the existing translations and focus on the first missing locale.
+
+The marker only disappears once the key is present and non-empty in **all** locales. Automatically updates when locale JSON files are edited.
 
 > 📸 _Screenshot: missing key underlined with diagnostic message_ — proximamente
 

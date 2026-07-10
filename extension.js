@@ -445,12 +445,31 @@ function validateDocument(doc) {
     if (Object.keys(sourceKeys).length === 0) { diagnosticCollection.set(doc.uri, []); return; }
 
     const { severity } = getConfig();
+    const locales = sortedLocales();
     const diags = [];
     for (const { key, range } of extractI18nUsages(doc)) {
         if (!(key in sourceKeys)) {
+            // Not in the source locale at all — a genuine missing key.
             const diag = new vscode.Diagnostic(range, `i18n key "${key}" not found in source locale`, getSeverity(severity));
             diag.source = 'ngx-i18n';
             diag.code = 'missing-key';
+            diags.push(diag);
+            continue;
+        }
+        // Exists in the source but may be incomplete in other locales. Keep the
+        // key flagged until it is present in EVERY locale (100% translated).
+        const missingIn = locales.filter(l => {
+            const v = allLocaleKeys[l]?.[key];
+            return v === undefined || v === null || String(v).trim() === '';
+        });
+        if (missingIn.length > 0) {
+            const diag = new vscode.Diagnostic(
+                range,
+                `i18n key "${key}" is incomplete — missing/empty in: ${missingIn.join(', ')}`,
+                getSeverity(severity)
+            );
+            diag.source = 'ngx-i18n';
+            diag.code = 'incomplete-key';
             diags.push(diag);
         }
     }
@@ -637,25 +656,45 @@ function provideCodeActions(doc, range, context) {
     const actions = [];
 
     for (const diag of context.diagnostics) {
-        if (diag.source !== 'ngx-i18n' || diag.code !== 'missing-key') continue;
+        if (diag.source !== 'ngx-i18n') continue;
 
-        // Extract the missing key from the diagnostic message
+        // Extract the key from the diagnostic message
         const keyMatch = diag.message.match(/i18n key "([^"]+)"/);
         if (!keyMatch) continue;
         const key = keyMatch[1];
 
-        const action = new vscode.CodeAction(
-            `💡 Crear key "${key}" en todos los locales`,
-            vscode.CodeActionKind.QuickFix
-        );
-        action.command = {
-            command: 'i18nKV.createKey',
-            title: 'Crear key en todos los locales',
-            arguments: [{ key }],
-        };
-        action.diagnostics = [diag];
-        action.isPreferred = true;
-        actions.push(action);
+        if (diag.code === 'missing-key') {
+            const action = new vscode.CodeAction(
+                `💡 Crear key "${key}" en todos los locales`,
+                vscode.CodeActionKind.QuickFix
+            );
+            action.command = {
+                command: 'i18nKV.createKey',
+                title: 'Crear key en todos los locales',
+                arguments: [{ key }],
+            };
+            action.diagnostics = [diag];
+            action.isPreferred = true;
+            actions.push(action);
+        } else if (diag.code === 'incomplete-key') {
+            // Find the first locale where the key is missing/empty, to focus it.
+            const focusLocale = sortedLocales().find(l => {
+                const v = allLocaleKeys[l]?.[key];
+                return v === undefined || v === null || String(v).trim() === '';
+            });
+            const action = new vscode.CodeAction(
+                `💡 Completar traducciones de "${key}"`,
+                vscode.CodeActionKind.QuickFix
+            );
+            action.command = {
+                command: 'i18nKV.createMissingKey',
+                title: 'Completar traducciones faltantes',
+                arguments: [{ key, focusLocale }],
+            };
+            action.diagnostics = [diag];
+            action.isPreferred = true;
+            actions.push(action);
+        }
     }
 
     return actions;
@@ -1026,6 +1065,8 @@ function showI18nTable(context, filterDoc = null) {
             vscode.commands.executeCommand('i18nKV.createMissingKey', { key: msg.key, focusLocale: msg.focusLocale });
         } else if (msg.type === 'refresh') {
             loadLocaleKeys();
+            revalidateAll();
+            refreshAllDecorations();
             if (tablePanel) {
                 tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
                 tablePanel.webview.postMessage({ type: 'refreshed' });
@@ -1531,6 +1572,8 @@ async function navigateToLocaleKey(currentFilePath, key, direction) {
             return;
         }
         loadLocaleKeys();
+        revalidateAll();
+        refreshAllDecorations();
         if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
     }
 
