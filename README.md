@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.3.2**
+**Version: 2.3.3**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -152,6 +152,7 @@ While editing a locale JSON file you can walk the **same key** across every lang
 
 - **`Ctrl+Click`** on a key jumps to that same key in the **next locale that has it**, cycling through all locales and wrapping from the last back to the first. Locales where the key is missing are skipped, and the cursor lands just inside the value string ready to edit.
 - Navigation uses VS Code's native _Go to Definition_, so it fires **only on the actual click** — holding Ctrl and moving the pointer just shows a peek preview and never navigates or changes files.
+- **Scroll position is preserved:** the target key opens at the **same on-screen position** the clicked key had, so cycling through locales doesn't jump the viewport around.
 
 Locale order follows the same convention as everywhere else: **ES first, EN second**, the rest alphabetical. There are no per-line CodeLenses, so the text never shifts as the cursor moves.
 

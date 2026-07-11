@@ -16,6 +16,14 @@ let keyFileMap = {};
 /** @type {string} */
 let localesAbsPath = '';
 
+/**
+ * When a Ctrl+Click on a locale key resolves to another locale file, we record
+ * the source viewport offset here so the destination editor can be scrolled to
+ * the same on-screen position once it opens.
+ * @type {{ fsPath: string, targetLine: number, offset: number, at: number } | null}
+ */
+let pendingScrollSync = null;
+
 /** @type {vscode.DiagnosticCollection} */
 let diagnosticCollection;
 
@@ -202,6 +210,12 @@ function activate(context) {
         vscode.window.registerWebviewViewProvider('i18nStudioPro.sidebar', sidebarViewProvider, {
             webviewOptions: { retainContextWhenHidden: true }
         })
+    );
+
+    // After a Ctrl+Click navigation between locale JSONs, keep the target key at
+    // the same on-screen position the source key had.
+    context.subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor(applyPendingScrollSync)
     );
 }
 
@@ -1565,11 +1579,62 @@ function provideLocaleJsonDefinition(doc, position) {
         const targetFile = keyFileMap[targetLocale]?.[key];
         if (targetFile && fs.existsSync(targetFile)) {
             const loc = locateKeyValuePosition(targetFile, key);
-            if (loc) return loc;
+            if (loc) {
+                recordScrollSync(doc, position.line, loc);
+                return loc;
+            }
         }
     }
     // No other locale has this key — nothing to navigate to.
     return null;
+}
+
+/**
+ * Records the source editor's on-screen offset (how many lines the clicked key
+ * sits below the top of the viewport) so the destination editor can be scrolled
+ * to the same visual position after the native navigation opens it.
+ * Safe to call from the definition provider — it only stores intent; the sync is
+ * applied by onDidChangeActiveTextEditor and expires quickly if no nav happens.
+ * @param {vscode.TextDocument} sourceDoc
+ * @param {number} sourceLine
+ * @param {vscode.Location} targetLoc
+ */
+function recordScrollSync(sourceDoc, sourceLine, targetLoc) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.fsPath !== sourceDoc.uri.fsPath) { pendingScrollSync = null; return; }
+    const visible = editor.visibleRanges[0];
+    if (!visible) { pendingScrollSync = null; return; }
+    const offset = sourceLine - visible.start.line; // lines below the viewport top
+    pendingScrollSync = {
+        fsPath: targetLoc.uri.fsPath,
+        targetLine: targetLoc.range.start.line,
+        offset,
+        at: Date.now(),
+    };
+}
+
+/**
+ * Applies a pending scroll sync: scrolls the newly-opened destination editor so
+ * the target line sits at the same viewport offset the source key had.
+ * @param {vscode.TextEditor | undefined} editor
+ */
+function applyPendingScrollSync(editor) {
+    if (!editor || !pendingScrollSync) return;
+    // Only act on the file the navigation targeted, and only shortly after.
+    if (editor.document.uri.fsPath !== pendingScrollSync.fsPath) return;
+    if (Date.now() - pendingScrollSync.at > 1500) { pendingScrollSync = null; return; }
+
+    const { targetLine, offset } = pendingScrollSync;
+    pendingScrollSync = null;
+
+    // Put the target line `offset` lines below the top of the viewport, matching
+    // the source. Reveal a range from (targetLine - offset) down to the target so
+    // the top line becomes the first visible line.
+    const topLine = Math.max(0, targetLine - Math.max(0, offset));
+    const lastLine = editor.document.lineCount - 1;
+    const revealFrom = new vscode.Position(topLine, 0);
+    const revealTo = new vscode.Position(Math.min(lastLine, targetLine), 0);
+    editor.revealRange(new vscode.Range(revealFrom, revealTo), vscode.TextEditorRevealType.AtTop);
 }
 
 // ─── CodeLens para locale JSON ───────────────────────────────────────────────
