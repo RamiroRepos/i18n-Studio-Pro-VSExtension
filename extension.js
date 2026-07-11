@@ -16,9 +16,6 @@ let keyFileMap = {};
 /** @type {string} */
 let localesAbsPath = '';
 
-/** Fires to force the locale-JSON CodeLenses to re-render (e.g. cursor moved). */
-const localeCodeLensEmitter = new vscode.EventEmitter();
-
 /** @type {vscode.DiagnosticCollection} */
 let diagnosticCollection;
 
@@ -167,13 +164,6 @@ function activate(context) {
         })
     );
 
-    // Navigate to the same key in the previous/next locale JSON (auto-creating if missing)
-    context.subscriptions.push(
-        vscode.commands.registerCommand('i18nKV.gotoLocaleKey', async ({ filePath, key, direction }) => {
-            await navigateToLocaleKey(filePath, key, direction);
-        })
-    );
-
     // From a hover: open the sidebar form to edit all translations of an existing key
     context.subscriptions.push(
         vscode.commands.registerCommand('i18nKV.editKeyInForm', async ({ key }) => {
@@ -208,25 +198,9 @@ function activate(context) {
         vscode.languages.registerDefinitionProvider({ language: 'json' }, { provideDefinition: provideLocaleJsonDefinition }),
         vscode.languages.registerCodeLensProvider({ language: 'json' }, {
             provideCodeLenses: provideLocaleJsonCodeLenses,
-            onDidChangeCodeLenses: localeCodeLensEmitter.event,
         }),
         vscode.window.registerWebviewViewProvider('i18nStudioPro.sidebar', sidebarViewProvider, {
             webviewOptions: { retainContextWhenHidden: true }
-        })
-    );
-
-    // Refresh navigation CodeLenses when the cursor moves within a locale JSON.
-    let lastLensLine = -1;
-    context.subscriptions.push(
-        vscode.window.onDidChangeTextEditorSelection(e => {
-            const doc = e.textEditor.document;
-            if (doc.languageId !== 'json') return;
-            if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return;
-            const line = e.selections[0]?.active.line ?? -1;
-            if (line !== lastLensLine) {
-                lastLensLine = line;
-                localeCodeLensEmitter.fire();
-            }
         })
     );
 }
@@ -1649,10 +1623,10 @@ function provideLocaleJsonDefinition(doc, position) {
 // ─── CodeLens para locale JSON ───────────────────────────────────────────────
 
 /**
- * Provides CodeLens actions on locale JSON files:
- *  - On the first line: "Ver tabla i18n" + "Ordenar keys A→Z"
- *  - On the line where the cursor currently sits (if it's a key): navigation
- *    lenses "‹ {prevLocale}" and "{nextLocale} ›" for the resolved key.
+ * Provides first-line CodeLens actions on locale JSON files:
+ * "Ver tabla i18n" + "Ordenar keys A→Z". Locale-to-locale navigation is done
+ * with Ctrl+Click on a key (see provideLocaleJsonDefinition), not CodeLenses,
+ * so the text never shifts as the cursor moves.
  * @param {vscode.TextDocument} doc
  * @returns {vscode.CodeLens[]}
  */
@@ -1676,35 +1650,8 @@ function provideLocaleJsonCodeLenses(doc) {
         tooltip: 'Ordena todas las keys de este archivo JSON alfabéticamente (recursivo)',
     }));
 
-    // Navigation lenses only on the line where the cursor currently is.
-    const editor = vscode.window.activeTextEditor;
-    if (editor && editor.document.uri.fsPath === filePath) {
-        const cursorPos = editor.selection.active;
-        const key = resolveJsonKeyOnLine(doc, cursorPos.line);
-        if (key) {
-            const locales = sortedLocales();
-            const currentLocale = localeFromFilePath(filePath);
-            const idx = locales.indexOf(currentLocale);
-            if (idx !== -1 && locales.length > 1) {
-                const prevLocale = locales[(idx - 1 + locales.length) % locales.length];
-                const nextLocale = locales[(idx + 1) % locales.length];
-                const lineRange = new vscode.Range(cursorPos.line, 0, cursorPos.line, 0);
-
-                lenses.push(new vscode.CodeLens(lineRange, {
-                    title: `$(arrow-left) ${prevLocale.toUpperCase()}`,
-                    command: 'i18nKV.gotoLocaleKey',
-                    arguments: [{ filePath, key, direction: -1 }],
-                    tooltip: `Ir a "${key}" en ${prevLocale} (se crea si falta)`,
-                }));
-                lenses.push(new vscode.CodeLens(lineRange, {
-                    title: `${nextLocale.toUpperCase()} $(arrow-right)`,
-                    command: 'i18nKV.gotoLocaleKey',
-                    arguments: [{ filePath, key, direction: 1 }],
-                    tooltip: `Ir a "${key}" en ${nextLocale} (se crea si falta) — o Ctrl+Click sobre la key`,
-                }));
-            }
-        }
-    }
+    // Navigation between locales is handled by Ctrl+Click on the key (cyclic),
+    // not by per-line CodeLenses — those would shift the text as the cursor moves.
 
     return lenses;
 }
