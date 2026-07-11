@@ -1504,119 +1504,71 @@ function localeFromFilePath(filePath) {
     return parts[0]; // namespaced: en/ns.json → "en"
 }
 
-/**
- * Resolves the destination file where `key` lives (or should be created) for a
- * given target locale, mirroring the namespace of the current file when needed.
- * @param {string} targetLocale
- * @param {string} key            full dot-notation key
- * @param {string} currentFilePath the file the user is navigating from
- * @returns {string | null}
- */
-function localeFileForKey(targetLocale, key, currentFilePath) {
-    // If the key already exists in the target locale, use its known file.
-    const known = keyFileMap[targetLocale]?.[key];
-    if (known) return known;
-
-    if (!localesAbsPath) return null;
-    const structure = localeStructure ?? detectLocaleStructure(localesAbsPath);
-
-    if (structure === 'namespaced') {
-        // Mirror the namespace file of the current file (e.g. common.json)
-        const nsFile = path.basename(currentFilePath);
-        return path.join(localesAbsPath, targetLocale, nsFile);
-    }
-    return path.join(localesAbsPath, `${targetLocale}.json`);
-}
-
-/**
- * Navigate from the current locale JSON to the same key in the previous/next
- * locale. If the key is missing there, it is created empty and the cursor is
- * placed inside the (empty) value string so the user can type the translation.
- * @param {string} currentFilePath
- * @param {string} key
- * @param {number} direction  +1 = next locale, -1 = previous locale
- */
-async function navigateToLocaleKey(currentFilePath, key, direction) {
-    const locales = sortedLocales();
-    if (locales.length < 2) {
-        vscode.window.showInformationMessage('i18n Studio Pro: Solo hay un locale.');
-        return;
-    }
-
-    const currentLocale = localeFromFilePath(currentFilePath);
-    const idx = locales.indexOf(currentLocale);
-    if (idx === -1) return;
-
-    const targetLocale = locales[(idx + direction + locales.length) % locales.length];
-    const targetFile = localeFileForKey(targetLocale, key, currentFilePath);
-    if (!targetFile) return;
-
-    // Auto-create the key (empty) if it doesn't exist in the target locale
-    const exists = allLocaleKeys[targetLocale]?.[key] !== undefined;
-    if (!exists) {
-        let json = {};
-        if (fs.existsSync(targetFile)) {
-            try { json = JSON.parse(fs.readFileSync(targetFile, 'utf8')); } catch (_) { json = {}; }
-        }
-        setNestedKey(json, key.split('.'), '');
-        try {
-            fs.mkdirSync(path.dirname(targetFile), { recursive: true });
-            fs.writeFileSync(targetFile, JSON.stringify(json, null, 2) + '\n', 'utf8');
-        } catch (e) {
-            vscode.window.showErrorMessage(`i18n Studio Pro: No se pudo crear la key en ${targetLocale}: ${e.message}`);
-            return;
-        }
-        loadLocaleKeys();
-        revalidateAll();
-        refreshAllDecorations();
-        if (tablePanel) tablePanel.webview.postMessage({ type: 'update', data: buildTableData() });
-    }
-
-    // Open the target file and place the cursor inside the value string
-    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(targetFile));
-    const editor = await vscode.window.showTextDocument(doc);
-    const lastSegment = key.split('.').pop();
-    const lines = doc.getText().split('\n');
-
-    let pos = new vscode.Position(0, 0);
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        // Match:  "lastSegment": "value"
-        const m = line.match(new RegExp('"' + escapeRegExp(lastSegment) + '"\\s*:\\s*"'));
-        if (m) {
-            // Cursor goes just after the opening quote of the value
-            const valueQuoteIdx = line.indexOf('"', m.index + m[0].length - 1);
-            pos = new vscode.Position(i, valueQuoteIdx + 1);
-            break;
-        }
-    }
-    editor.selection = new vscode.Selection(pos, pos);
-    editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
-
-    if (!exists) {
-        vscode.window.setStatusBarMessage(`i18n Studio Pro: key creada en ${targetLocale} — escribe la traducción`, 4000);
-    }
-}
-
 /** Escapes a string for safe use inside a RegExp. */
 function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * Ctrl+Click on a key inside a locale JSON jumps to the same key in the NEXT
- * locale, creating it empty there if it doesn't exist. Runs the navigation
- * itself (it may write a file + move the cursor) and returns null so VS Code
- * does not perform its own default navigation.
+ * Returns a vscode.Location pointing just inside the value string of `key`
+ * within `filePath`, so Ctrl+Click lands the cursor ready to edit the value.
+ * Read-only — safe to call from a definition provider. Returns null if not found.
+ * @param {string} filePath
+ * @param {string} key  full dot-notation key
+ * @returns {vscode.Location | null}
+ */
+function locateKeyValuePosition(filePath, key) {
+    let text;
+    try { text = fs.readFileSync(filePath, 'utf8'); } catch (_) { return null; }
+    const lastSegment = key.split('.').pop();
+    const lines = text.split('\n');
+    const re = new RegExp('"' + escapeRegExp(lastSegment) + '"\\s*:\\s*"');
+    for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(re);
+        if (m) {
+            const valueQuoteIdx = lines[i].indexOf('"', m.index + m[0].length - 1);
+            const pos = new vscode.Position(i, valueQuoteIdx + 1);
+            return new vscode.Location(vscode.Uri.file(filePath), pos);
+        }
+    }
+    // Key present but value not on a single quoted line — fall back to line 0.
+    return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(0, 0));
+}
+
+/**
+ * Ctrl+Click on a key inside a locale JSON cycles to the same key in the next
+ * locale that actually HAS it (skipping locales where the key is missing).
+ * Returns a vscode.Location so VS Code performs the navigation natively on the
+ * real click only — Ctrl+hover just shows a peek preview with no side effects.
+ *
+ * Pure/read-only by design: definition providers also run on Ctrl+hover, so
+ * this must never create files or move the cursor itself.
  * @param {vscode.TextDocument} doc
  * @param {vscode.Position} position
- * @returns {null}
+ * @returns {vscode.Location | null}
  */
 function provideLocaleJsonDefinition(doc, position) {
     if (!localesAbsPath || !doc.uri.fsPath.startsWith(localesAbsPath)) return null;
     const key = resolveJsonKeyOnLine(doc, position.line);
     if (!key) return null;
-    navigateToLocaleKey(doc.uri.fsPath, key, 1);
+
+    const locales = sortedLocales();
+    if (locales.length < 2) return null;
+    const currentLocale = localeFromFilePath(doc.uri.fsPath);
+    const idx = locales.indexOf(currentLocale);
+    if (idx === -1) return null;
+
+    // Walk forward cyclically to the next locale that has this key.
+    for (let step = 1; step < locales.length; step++) {
+        const targetLocale = locales[(idx + step) % locales.length];
+        if (allLocaleKeys[targetLocale]?.[key] === undefined) continue; // skip missing
+        const targetFile = keyFileMap[targetLocale]?.[key];
+        if (targetFile && fs.existsSync(targetFile)) {
+            const loc = locateKeyValuePosition(targetFile, key);
+            if (loc) return loc;
+        }
+    }
+    // No other locale has this key — nothing to navigate to.
     return null;
 }
 

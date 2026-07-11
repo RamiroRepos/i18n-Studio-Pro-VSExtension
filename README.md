@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.3.1**
+**Version: 2.3.2**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -31,7 +31,7 @@ Supports two file structures:
 | **i18n Key Table** | Panel | Full key × locale table with search, missing filter and ↗ file links |
 | **Create missing from table** | Table | ✚ button on any missing cell opens the sidebar form prefilled for that key |
 | **Refresh table** | Table | ⟳ button reloads keys from disk when JSON is edited outside the extension |
-| **Locale navigation in JSON** | Locale JSON | Ctrl+Click on a key cycles to the same key in the next locale (creates it empty if missing) |
+| **Locale navigation in JSON** | Locale JSON | Ctrl+Click on a key cycles to the next locale that has it (skips locales where it's missing) |
 | **Table for file** | Toolbar 🌐 | Opens the table filtered to the keys used in the active file |
 | **Plain text detection** | Table / Sidebar | Detects untranslated plain text in HTML and suggests creating keys |
 | **CodeLens in JSON** | Locale JSON | First-line actions: open table and sort keys A→Z |
@@ -150,10 +150,10 @@ The sort confirmation asks whether to sort **only this file** or **all locale fi
 
 While editing a locale JSON file you can walk the **same key** across every language without leaving the editor:
 
-- **`Ctrl+Click`** on a key jumps to that same key in the **next locale** file, **cycling** through all locales and wrapping from the last back to the first.
-- If the key does **not** exist in the target locale, it is **created empty** and the cursor is placed inside the value string, ready for you to type the translation. The key table refreshes automatically.
+- **`Ctrl+Click`** on a key jumps to that same key in the **next locale that has it**, cycling through all locales and wrapping from the last back to the first. Locales where the key is missing are skipped, and the cursor lands just inside the value string ready to edit.
+- Navigation uses VS Code's native _Go to Definition_, so it fires **only on the actual click** — holding Ctrl and moving the pointer just shows a peek preview and never navigates or changes files.
 
-Locale order follows the same convention as everywhere else: **ES first, EN second**, the rest alphabetical. Navigation is Ctrl+Click only — there are no per-line CodeLenses, so the text never shifts as the cursor moves.
+Locale order follows the same convention as everywhere else: **ES first, EN second**, the rest alphabetical. There are no per-line CodeLenses, so the text never shifts as the cursor moves.
 
 > 📸 _Screenshot: Ctrl+Click cycling the same key across locale files_ — proximamente
 
@@ -260,7 +260,7 @@ The **🌐 button** in the editor toolbar (visible on `.html` and `.ts` files) i
 3. Scans each open `.html` and `.ts` file for `| translate` and `translate.instant/get/stream()` patterns
 4. Marks as error/warning/info any key not found in the source locale
 5. Shows inline decorations with the translation in gray italic next to each key
-6. `Ctrl+Click` in HTML/TS navigates to the source locale JSON at the exact key line; in a locale JSON, it cycles to the same key in the next locale (creating it if missing)
+6. `Ctrl+Click` in HTML/TS navigates to the source locale JSON at the exact key line; in a locale JSON, it cycles to the next locale that has the key (skipping missing ones), on the click only
 7. Watches locale JSON files for changes and re-validates automatically
 
 ---
