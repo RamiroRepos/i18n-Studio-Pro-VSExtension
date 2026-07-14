@@ -7,6 +7,14 @@ const path = require('path');
 /** @type {Record<string, Record<string, any>>} */
 let allLocaleKeys = {};
 
+/**
+ * locale → Set of parent-object key paths (e.g. "reservation.dateFormat").
+ * These are valid lookup targets (translate.instant of a whole sub-tree) but
+ * are not leaf translations, so they're tracked apart from allLocaleKeys.
+ * @type {Record<string, Set<string>>}
+ */
+let parentKeys = {};
+
 /** @type {vscode.WebviewPanel | undefined} */
 let tablePanel;
 
@@ -262,12 +270,18 @@ let outputChannel;
 /** @type {string[]} last scan log lines, kept for issue reports */
 let lastScanLog = [];
 
-function flattenKeys(obj, prefix, result) {
+function flattenKeys(obj, prefix, result, parents) {
     for (const key of Object.keys(obj)) {
         const fullKey = prefix != null && prefix !== '' ? `${prefix}.${key}` : key;
         const val = obj[key];
         if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
-            flattenKeys(val, fullKey, result);
+            // Record the parent object path separately (not as a leaf value).
+            // Fetching a whole sub-tree at once — translate.instant('a.b') where
+            // a.b is an object — is a legitimate ngx-translate pattern, so these
+            // paths must count as "existing" for validation, but they are NOT
+            // real translation rows (kept out of the table / decorations).
+            if (parents) parents.add(fullKey);
+            flattenKeys(val, fullKey, result, parents);
         } else {
             result[fullKey] = val;
         }
@@ -295,6 +309,7 @@ function detectLocaleStructure(localesRoot) {
 function loadLocaleKeys() {
     allLocaleKeys = {};
     keyFileMap = {};
+    parentKeys = {};
     localeStructure = null;
     const root = getWorkspaceRoot();
     if (!root) return;
@@ -318,13 +333,14 @@ function loadLocaleKeys() {
             const localePath = path.join(localesRoot, locale);
             allLocaleKeys[locale] = {};
             keyFileMap[locale] = {};
+            parentKeys[locale] = new Set();
             try {
                 const files = fs.readdirSync(localePath).filter(f => f.endsWith('.json'));
                 for (const file of files) {
                     const filePath = path.join(localePath, file);
                     try {
                         const flat = {};
-                        flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat);
+                        flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat, parentKeys[locale]);
                         for (const k of Object.keys(flat)) {
                             allLocaleKeys[locale][k] = flat[k];
                             keyFileMap[locale][k] = filePath;
@@ -347,9 +363,10 @@ function loadLocaleKeys() {
             const filePath = path.join(localesRoot, file);
             allLocaleKeys[locale] = {};
             keyFileMap[locale] = {};
+            parentKeys[locale] = new Set();
             try {
                 const flat = {};
-                flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat);
+                flattenKeys(JSON.parse(fs.readFileSync(filePath, 'utf8')), null, flat, parentKeys[locale]);
                 for (const k of Object.keys(flat)) {
                     allLocaleKeys[locale][k] = flat[k];
                     keyFileMap[locale][k] = filePath;
@@ -436,14 +453,18 @@ function getSeverity(severityStr) {
 
 function validateDocument(doc) {
     if (!['html', 'typescript'].includes(doc.languageId)) return;
+    const { sourceLocale, severity } = getConfig();
     const sourceKeys = getSourceKeys();
     if (Object.keys(sourceKeys).length === 0) { diagnosticCollection.set(doc.uri, []); return; }
 
-    const { severity } = getConfig();
     const locales = sortedLocales();
     const diags = [];
     for (const { key, range } of extractI18nUsages(doc)) {
-        if (!(key in sourceKeys)) {
+        // A key is valid if it's a leaf OR a parent-object path. Fetching a whole
+        // sub-tree (translate.instant('a.b') where a.b is an object) is a
+        // legitimate ngx-translate pattern and must not be flagged as missing.
+        const isParentInSource = parentKeys[sourceLocale]?.has(key);
+        if (!(key in sourceKeys) && !isParentInSource) {
             // Not in the source locale at all — a genuine missing key.
             const diag = new vscode.Diagnostic(range, `i18n key "${key}" not found in source locale`, getSeverity(severity));
             diag.source = 'ngx-i18n';
@@ -451,8 +472,26 @@ function validateDocument(doc) {
             diags.push(diag);
             continue;
         }
-        // Exists in the source but may be incomplete in other locales. Keep the
-        // key flagged until it is present in EVERY locale (100% translated).
+        // Parent-object lookups: consider them complete as long as the sub-tree
+        // exists in each locale. Don't try to diff empty strings on an object.
+        if (isParentInSource) {
+            const missingParent = locales.filter(l =>
+                !parentKeys[l]?.has(key) && !(key in (allLocaleKeys[l] ?? {}))
+            );
+            if (missingParent.length > 0) {
+                const diag = new vscode.Diagnostic(
+                    range,
+                    `i18n key "${key}" is incomplete — missing in: ${missingParent.join(', ')}`,
+                    getSeverity(severity)
+                );
+                diag.source = 'ngx-i18n';
+                diag.code = 'incomplete-key';
+                diags.push(diag);
+            }
+            continue;
+        }
+        // Leaf key: exists in the source but may be incomplete in other locales.
+        // Keep it flagged until present and non-empty in EVERY locale.
         const missingIn = locales.filter(l => {
             const v = allLocaleKeys[l]?.[key];
             return v === undefined || v === null || String(v).trim() === '';
@@ -525,12 +564,30 @@ function provideHover(doc, position) {
     if (!usage) return null;
 
     const { key } = usage;
+    const { sourceLocale } = getConfig();
     const md = new vscode.MarkdownString('', true);
     md.isTrusted = true;
     md.supportHtml = true;
 
-    if (!(key in sourceKeys)) {
+    const isParent = parentKeys[sourceLocale]?.has(key);
+
+    if (!(key in sourceKeys) && !isParent) {
         md.appendMarkdown(`**ngx-i18n** ❌ \`${key}\` — key not found\n`);
+        return new vscode.Hover(md, usage.range);
+    }
+
+    if (isParent) {
+        // Whole sub-tree lookup (translate.instant of an object).
+        md.appendMarkdown(`**ngx-i18n** \`${key}\` &nbsp; _(objeto)_\n\n---\n\n`);
+        for (const locale of sortedLocales()) {
+            const label = LOCALE_LABELS[locale] ?? `🌐 ${locale.toUpperCase()}`;
+            const present = parentKeys[locale]?.has(key);
+            md.appendMarkdown(present
+                ? `${label} &nbsp; sub-árbol presente ✓\n\n`
+                : `${label} &nbsp; *(missing)*\n\n`
+            );
+        }
+        md.appendMarkdown(`\n---\n\n${editInFormLink(key)}\n`);
         return new vscode.Hover(md, usage.range);
     }
 
@@ -1004,10 +1061,6 @@ function resolveJsonKeyOnLine(doc, lineNo) {
     const lineText = doc.lineAt(lineNo).text;
     const keyOnLineMatch = lineText.match(/^\s*"([^"]+)"\s*:/);
     if (!keyOnLineMatch) return null;
-
-    // Only leaf keys (with a string/number value) can be navigated; skip object
-    // openers like "company": { — those aren't translation entries.
-    if (/^\s*"[^"]+"\s*:\s*\{\s*$/.test(lineText)) return null;
 
     const keySegment = keyOnLineMatch[1];
 
@@ -1534,18 +1587,41 @@ function escapeRegExp(s) {
 function locateKeyValuePosition(filePath, key) {
     let text;
     try { text = fs.readFileSync(filePath, 'utf8'); } catch (_) { return null; }
-    const lastSegment = key.split('.').pop();
     const lines = text.split('\n');
-    const re = new RegExp('"' + escapeRegExp(lastSegment) + '"\\s*:\\s*"');
+    const segments = key.split('.');
+    const lastSegment = segments[segments.length - 1];
+
+    // Match the full dot path against the document's actual nesting (by
+    // indentation), so a leaf key or a parent object opener with the same
+    // last segment name elsewhere in the file isn't picked by mistake.
+    const stack = []; // segment names of currently open ancestor objects, by indent
     for (let i = 0; i < lines.length; i++) {
-        const m = lines[i].match(re);
-        if (m) {
-            const valueQuoteIdx = lines[i].indexOf('"', m.index + m[0].length - 1);
-            const pos = new vscode.Position(i, valueQuoteIdx + 1);
-            return new vscode.Location(vscode.Uri.file(filePath), pos);
+        const line = lines[i];
+        const keyMatch = line.match(/^(\s*)"([^"]+)"\s*:/);
+        if (!keyMatch) continue;
+        const indent = keyMatch[1].length;
+        const name = keyMatch[2];
+
+        while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+        const pathSoFar = [...stack.map(s => s.name), name];
+        const isObjectOpener = /:\s*\{\s*$/.test(line);
+
+        if (name === lastSegment && pathSoFar.join('.') === key) {
+            if (isObjectOpener) {
+                const braceIdx = line.lastIndexOf('{');
+                return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(i, braceIdx + 1));
+            }
+            const valueQuoteMatch = line.match(/:\s*"/);
+            if (valueQuoteMatch) {
+                const valueQuoteIdx = line.indexOf('"', valueQuoteMatch.index + valueQuoteMatch[0].length - 1);
+                return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(i, valueQuoteIdx + 1));
+            }
+            return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(i, 0));
         }
+
+        if (isObjectOpener) stack.push({ name, indent });
     }
-    // Key present but value not on a single quoted line — fall back to line 0.
+    // Key present in allLocaleKeys but not found by structural walk — fall back to line 0.
     return new vscode.Location(vscode.Uri.file(filePath), new vscode.Position(0, 0));
 }
 
@@ -1853,6 +1929,8 @@ async function runProjectScan() {
     sidebarView.webview.postMessage({ type: 'scanProgress', done: 0, total });
 
     const sourceKeys = getSourceKeys();
+    const { sourceLocale } = getConfig();
+    const sourceParentKeys = parentKeys[sourceLocale] ?? new Set();
     const missingKeys = [];
     const plainTextByFile = {};
     const BATCH = 5;
@@ -1873,7 +1951,10 @@ async function runProjectScan() {
             try {
                 const doc = await vscode.workspace.openTextDocument(uri);
                 for (const { key, range } of extractI18nUsages(doc)) {
-                    if (!(key in sourceKeys)) {
+                    // Parent-object lookups (translate.instant('a.b') where a.b is
+                    // an object, e.g. reservation.dateFormat) are valid — same rule
+                    // as validateDocument.
+                    if (!(key in sourceKeys) && !sourceParentKeys.has(key)) {
                         missingKeys.push({
                             key,
                             file: vscode.workspace.asRelativePath(uri),
@@ -2280,21 +2361,27 @@ function getSidebarHtml() {
 (function() {
   const vscode = acquireVsCodeApi();
 
-  // ── Section collapse ──────────────────────────────────────────────────────
+  // ── Section collapse (accordion: opening one collapses the others) ────────
+  const ALL_SECTIONS = ['s-config', 's-scan', 's-addkey', 's-report'];
   const collapsedSections = {};
-  function toggleSection(id) {
+  function collapseSection(id) {
     const body = document.getElementById(id + '-body');
     const chevron = document.querySelector('#' + id + ' .chevron');
-    collapsedSections[id] = !collapsedSections[id];
-    body.classList.toggle('hidden', collapsedSections[id]);
-    chevron.textContent = collapsedSections[id] ? '▸' : '▾';
+    collapsedSections[id] = true;
+    if (body) body.classList.add('hidden');
+    if (chevron) chevron.textContent = '▸';
   }
   function openSection(id) {
+    ALL_SECTIONS.forEach(other => { if (other !== id) collapseSection(other); });
     const body = document.getElementById(id + '-body');
     const chevron = document.querySelector('#' + id + ' .chevron');
     collapsedSections[id] = false;
-    body.classList.remove('hidden');
+    if (body) body.classList.remove('hidden');
     if (chevron) chevron.textContent = '▾';
+  }
+  function toggleSection(id) {
+    if (collapsedSections[id]) openSection(id);
+    else collapseSection(id);
   }
   window.toggleSection = toggleSection;
 

@@ -10,7 +10,7 @@ Supports two file structures:
 - **Namespaced:** `src/assets/i18n/{locale}/{namespace}.json`
 - **Flat:** `src/assets/i18n/{locale}.json` (e.g. `en.json`, `es.json` — auto-detected)
 
-**Version: 2.3.3**
+**Version: 2.3.5**
 
 **Found a bug or false positive?** [Open an issue on GitHub](https://github.com/RamiroRepos/i18n-Studio-Pro-VSExtension/issues/new) — or use the **🐛 Report Issue** section inside the extension sidebar.
 
@@ -21,6 +21,7 @@ Supports two file structures:
 | Feature | Where | Description |
 |---|---|---|
 | **Real-time Validation** | HTML / TS | Flags keys missing in the source **or** incomplete in any locale — stays until 100% translated |
+| **Parent-object lookups** | HTML / TS | `translate.instant('a.b')` where `a.b` is an object is recognized as valid, not a false missing |
 | **Inline Decorations** | HTML / TS | Shows the translated value in gray italic next to each key |
 | **Smart Hover** | HTML / TS | Hover a key to see all locale translations, file links, and an ✎ _Abrir en formulario_ button |
 | **Hover in JSON** | Locale JSON | Hover a key to see its value in every other language, plus the ✎ _Abrir en formulario_ button |
@@ -53,6 +54,8 @@ Detects all i18n keys used in HTML templates and TypeScript files, and keeps the
 
 - **Missing key** — the key does not exist in the source locale. Quick Fix: _Crear key en todos los locales_.
 - **Incomplete key** — the key exists in the source but is **missing or empty** in one or more other locales. The diagnostic lists exactly which locales are missing (e.g. _missing/empty in: en, fr_) and stays visible until every locale has a non-empty value. Quick Fix: _Completar traducciones_ opens the sidebar form prefilled with the existing translations and focus on the first missing locale.
+
+**Parent-object lookups are supported.** Fetching a whole sub-tree at once — e.g. `translate.instant('reservation.dateFormat')` where `dateFormat` is an object of nested keys — is a valid ngx-translate pattern and is **not** flagged as missing. The validator recognizes both leaf keys and parent-object paths; a parent lookup is only flagged when the sub-tree is absent in some locale.
 
 The marker only disappears once the key is present and non-empty in **all** locales. Automatically updates when locale JSON files are edited.
 
